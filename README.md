@@ -49,7 +49,7 @@ Pra revogar do lado servidor: peça pro administrador deletar a linha correspond
 
 ## Projetos & apelidos suportados
 
-| Token | Cliente | Apelidos |
+| Slug | Cliente | Apelidos |
 |---|---|---|
 | `smo-2026` | Santa Maria Outlet | SMO, santa maria, outlet |
 | `sol-2026` | SOL Engrenagens | SOL |
@@ -58,6 +58,8 @@ Pra revogar do lado servidor: peça pro administrador deletar a linha correspond
 | `compras-2026` | Sistema de Compras (White Label) | Compras |
 | `gestou-2026` | Gestou | Gestou |
 | `podpratas-2026` | POD Pratas925 | POD, pratas |
+
+> O slug é o `agentSlug` do projeto no banco — independente do `publicToken` (portal público), que pode permanecer NULL. Plugin **não** ativa portais públicos.
 
 ## Restrição
 

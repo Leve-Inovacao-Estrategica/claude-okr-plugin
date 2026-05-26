@@ -23,9 +23,9 @@ claude-okr ensure-login
 
 ## Projetos disponíveis
 
-Tokens estáveis dos projetos (resolva por apelido quando o usuário falar nome livre):
+Slugs estáveis dos projetos (resolva por apelido quando o usuário falar nome livre):
 
-| Token | Cliente | Apelidos comuns |
+| Slug | Cliente | Apelidos comuns |
 |---|---|---|
 | `smo-2026` | Santa Maria Outlet | SMO, santa maria, outlet |
 | `sol-2026` | SOL Engrenagens | SOL, sol engrenagens |
@@ -37,7 +37,7 @@ Tokens estáveis dos projetos (resolva por apelido quando o usuário falar nome 
 
 Em caso de ambiguidade, confirme com o usuário antes de prosseguir.
 
-> **Atenção:** se um projeto não tiver `publicToken` setado em prod, ele não aparece em `GET /api/agent/projects`. Se acontecer, peça pro administrador rodar `scripts/setup-portal-tokens.mjs` ou setar manualmente.
+> O slug corresponde ao campo `agentSlug` no `Project` do banco — independente do `publicToken` (portal público), que pode continuar desligado. A Agent API resolve `?projectToken=...` em qualquer um dos dois campos.
 
 ## Usuários conhecidos (resolução de email)
 
