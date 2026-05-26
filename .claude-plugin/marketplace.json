@@ -1,0 +1,16 @@
+{
+  "name": "leve",
+  "owner": {
+    "name": "Leve Inovação Estratégica",
+    "url": "https://leveinovacao.com.br"
+  },
+  "plugins": [
+    {
+      "name": "okr",
+      "source": "./plugins/okr",
+      "description": "Gerenciar tarefas no Leve OKR via Claude Code (criar, listar, marcar como concluída) com autenticação por conta Google da Leve.",
+      "version": "0.1.0",
+      "author": { "name": "Leve Inovação" }
+    }
+  ]
+}

@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+#
+# claude-okr — CLI helper do plugin okr para Claude Code.
+# Conversa com a Agent API do Leve OKR autenticando via Personal Access Token (PAT)
+# obtido por OAuth device flow (a pessoa autoriza no navegador uma vez por máquina).
+#
+# Subcomandos:
+#   login           autentica via device flow e salva o PAT
+#   whoami          mostra o usuário associado ao PAT atual
+#   logout          remove o PAT local
+#   ensure-login    garante que existe um PAT válido (faz login se faltar)
+#   call <method> <path> [<json-body>]
+#                   chama a API com o PAT atual (auto-faz login se faltar)
+#
+# Convenções:
+#   - PAT salvo em $XDG_CONFIG_HOME/leve-okr/credentials (default ~/.config/leve-okr/credentials)
+#   - chmod 600 em todos os arquivos sensíveis
+#   - URL do OKR: variável OKR_BASE_URL (default https://okr.leveinovacao.com.br)
+#
+set -euo pipefail
+
+OKR_BASE_URL="${OKR_BASE_URL:-https://okr.leveinovacao.com.br}"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/leve-okr"
+CREDS_FILE="$CONFIG_DIR/credentials"
+POLL_INTERVAL=3
+
+die() { printf '%s\n' "$*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "Dependência ausente: $1"; }
+
+ensure_deps() {
+  need curl
+  need python3
+}
+
+ensure_config_dir() {
+  if [ ! -d "$CONFIG_DIR" ]; then
+    mkdir -p "$CONFIG_DIR"
+    chmod 700 "$CONFIG_DIR"
+  fi
+}
+
+load_token() {
+  [ -f "$CREDS_FILE" ] || return 1
+  # shellcheck disable=SC1090
+  . "$CREDS_FILE"
+  [ -n "${OKR_TOKEN:-}" ] || return 1
+  echo "$OKR_TOKEN"
+}
+
+save_token() {
+  ensure_config_dir
+  printf 'OKR_TOKEN=%q\n' "$1" > "$CREDS_FILE"
+  chmod 600 "$CREDS_FILE"
+}
+
+cmd_login() {
+  ensure_deps
+  ensure_config_dir
+  local client_name="${1:-Claude Code ($(hostname))}"
+
+  # 1. /start
+  local resp device_code user_code verification_url
+  resp=$(curl -fsS -X POST -H "Content-Type: application/json" \
+    -d "$(python3 -c "import json,sys; print(json.dumps({'clientName': sys.argv[1]}))" "$client_name")" \
+    "$OKR_BASE_URL/api/cli/auth/start") || die "Falha ao iniciar auth (verifique conexão com $OKR_BASE_URL)"
+
+  device_code=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['deviceCode'])")
+  user_code=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['userCode'])")
+  verification_url=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['verificationUriComplete'])")
+
+  cat >&2 <<EOF
+
+Para autorizar este plugin, abra a URL abaixo no navegador e clique em "Autorizar":
+
+  $verification_url
+
+Código: $user_code   (válido por ~10 minutos)
+
+Aguardando autorização...
+EOF
+
+  # 2. polling
+  local deadline=$(( $(date +%s) + 540 ))
+  local status token user_email user_name
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    resp=$(curl -fsS -X POST -H "Content-Type: application/json" \
+      -d "$(python3 -c "import json,sys; print(json.dumps({'deviceCode': sys.argv[1]}))" "$device_code")" \
+      "$OKR_BASE_URL/api/cli/auth/poll") || die "Falha no polling"
+    status=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))")
+    case "$status" in
+      pending)
+        sleep "$POLL_INTERVAL"
+        continue
+        ;;
+      approved)
+        token=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
+        user_email=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['user']['email'])")
+        user_name=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['user']['name'])")
+        save_token "$token"
+        printf 'Autenticado como %s (%s).\n' "$user_name" "$user_email" >&2
+        return 0
+        ;;
+      denied)
+        die "Autorização negada."
+        ;;
+      expired)
+        die "Código expirou. Rode 'claude-okr login' de novo."
+        ;;
+      *)
+        die "Resposta inesperada do servidor: $resp"
+        ;;
+    esac
+  done
+  die "Timeout aguardando autorização."
+}
+
+cmd_whoami() {
+  local token
+  token=$(load_token 2>/dev/null) || die "Não autenticado. Rode 'claude-okr login' primeiro."
+  local resp
+  resp=$(curl -fsS -H "Authorization: Bearer $token" "$OKR_BASE_URL/api/agent/projects") \
+    || die "Token inválido ou expirado. Rode 'claude-okr login' de novo."
+  # Endpoint /projects não retorna usuário diretamente; pra simplificar,
+  # confirmamos que o token é aceito mostrando contagem de projetos.
+  echo "$resp" | python3 -c "
+import json, sys
+projs = json.load(sys.stdin)
+n = len(projs) if isinstance(projs, list) else 0
+print(f'Token válido. {n} projeto(s) visível(eis) na sua conta.')
+"
+}
+
+cmd_logout() {
+  if [ -f "$CREDS_FILE" ]; then
+    rm "$CREDS_FILE"
+    echo "Token removido."
+  else
+    echo "Nada a remover."
+  fi
+}
+
+cmd_ensure_login() {
+  local token
+  if token=$(load_token 2>/dev/null); then
+    # Verifica que o token ainda é válido com uma chamada leve
+    if curl -fsS -o /dev/null -H "Authorization: Bearer $token" "$OKR_BASE_URL/api/agent/projects"; then
+      return 0
+    fi
+    echo "Token salvo está inválido — refazendo login." >&2
+  fi
+  cmd_login
+}
+
+cmd_call() {
+  cmd_ensure_login >&2
+  local method="${1:?'método HTTP necessário'}"
+  local path="${2:?'caminho necessário (ex: /api/agent/projects)'}"
+  local body="${3:-}"
+  local token
+  token=$(load_token) || die "Sem token (após ensure-login?). Inconsistência interna."
+
+  local url
+  if [[ "$path" == http* ]]; then
+    url="$path"
+  else
+    url="${OKR_BASE_URL}${path}"
+  fi
+
+  if [ -n "$body" ]; then
+    curl -fsS -X "$method" \
+      -H "Authorization: Bearer $token" \
+      -H "Content-Type: application/json" \
+      -d "$body" \
+      "$url"
+  else
+    curl -fsS -X "$method" \
+      -H "Authorization: Bearer $token" \
+      "$url"
+  fi
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+  case "$cmd" in
+    login)        cmd_login "$@" ;;
+    whoami)       cmd_whoami ;;
+    logout)       cmd_logout ;;
+    ensure-login) cmd_ensure_login ;;
+    call)         cmd_call "$@" ;;
+    -h|--help|help|"")
+      cat <<EOF
+claude-okr — CLI do plugin okr para Claude Code
+
+Uso:
+  claude-okr login            Autentica via OAuth no navegador (uma vez por máquina)
+  claude-okr whoami           Mostra se está autenticado
+  claude-okr logout           Remove credenciais locais
+  claude-okr ensure-login     Garante que existe sessão válida (auto-login se faltar)
+  claude-okr call <METHOD> <PATH> [<JSON_BODY>]
+                              Chama API autenticada. PATH pode começar com / ou ser URL completa.
+
+Variáveis:
+  OKR_BASE_URL                Default: https://okr.leveinovacao.com.br
+EOF
+      ;;
+    *)
+      die "Subcomando desconhecido: $cmd (use 'claude-okr --help')"
+      ;;
+  esac
+}
+
+main "$@"

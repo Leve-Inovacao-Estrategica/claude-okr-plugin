@@ -1,0 +1,11 @@
+{
+  "name": "okr",
+  "description": "Gerenciar tarefas no Leve OKR via Claude Code com autenticação OAuth por conta Google da Leve.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Leve Inovação Estratégica",
+    "url": "https://leveinovacao.com.br"
+  },
+  "repository": "https://github.com/Leve-Inovacao-Estrategica/claude-okr-plugin",
+  "homepage": "https://okr.leveinovacao.com.br"
+}
