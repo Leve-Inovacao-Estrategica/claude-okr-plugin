@@ -61,20 +61,38 @@ save_token() {
   chmod 600 "$CREDS_FILE"
 }
 
-# login-start: inicia o fluxo, imprime JSON em STDOUT, persiste deviceCode.
+# Tenta abrir a URL no navegador padrão do desktop (best-effort).
+try_open_browser() {
+  local url="$1"
+  # CLAUDE_OKR_NO_BROWSER=1 desabilita auto-abertura (útil em CI, server sem GUI)
+  [ "${CLAUDE_OKR_NO_BROWSER:-0}" = "1" ] && return 0
+  if command -v xdg-open >/dev/null 2>&1; then
+    nohup xdg-open "$url" >/dev/null 2>&1 &
+  elif command -v open >/dev/null 2>&1; then
+    nohup open "$url" >/dev/null 2>&1 &
+  elif command -v start >/dev/null 2>&1; then
+    nohup start "$url" >/dev/null 2>&1 &
+  fi
+}
+
+# login-start: inicia o fluxo, imprime JSON em STDOUT, persiste deviceCode,
+# e (best-effort) abre a URL no navegador padrão. Não bloqueia.
 cmd_login_start() {
   ensure_deps
   ensure_config_dir
   local client_name="${1:-Claude Code ($(hostname))}"
 
-  local resp device_code
+  local resp device_code verification_uri
   resp=$(curl -fsS -X POST -H "Content-Type: application/json" \
     -d "$(python3 -c "import json,sys; print(json.dumps({'clientName': sys.argv[1]}))" "$client_name")" \
     "$OKR_BASE_URL/api/cli/auth/start") || die "Falha ao iniciar auth (verifique conexão com $OKR_BASE_URL)"
 
   device_code=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['deviceCode'])")
+  verification_uri=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['verificationUriComplete'])")
   printf '%s' "$device_code" > "$PENDING_FILE"
   chmod 600 "$PENDING_FILE"
+
+  try_open_browser "$verification_uri"
 
   # Saída pra Claude/usuário parsear — só os campos públicos, sem deviceCode
   echo "$resp" | python3 -c "
@@ -84,6 +102,7 @@ print(json.dumps({
     'user_code': d['userCode'],
     'verification_uri': d['verificationUriComplete'],
     'expires_in_seconds': d['expiresIn'],
+    'browser_opened': True,
 }, indent=2))
 "
 }

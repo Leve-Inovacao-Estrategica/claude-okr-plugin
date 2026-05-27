@@ -7,69 +7,56 @@ description: Gerenciar tarefas no Leve OKR (plataforma interna da Leve Inovaçã
 
 Plataforma interna da Leve Inovação Estratégica para gerenciar OKRs e tarefas de projetos com clientes. Esta skill conversa com a Agent API do Leve OKR em `https://okr.leveinovacao.com.br` via o helper `claude-okr`.
 
-## Pré-requisito: autenticação (UX crítica — leia com atenção)
+## ⚠️ AUTENTICAÇÃO — UX CRÍTICA, SIGA EXATO
 
-Antes de qualquer chamada à API, garanta que o usuário está autenticado via PAT (Personal Access Token).
+Toda chamada à API precisa de PAT. Quando o PAT não existe, você (Claude) PRECISA mostrar a URL no chat IMEDIATAMENTE — sem o usuário ver, ele não consegue autorizar.
 
-### Caso A — já autenticado (caminho comum)
+### Protocolo obrigatório (4 passos)
 
-Rode silenciosamente:
-```bash
-claude-okr ensure-login
-```
+**Passo 1 — Tente operação.** Se `claude-okr call ...` ou `claude-okr ensure-login` retornar **exit 2** com `AUTH_REQUIRED`, siga pra Passo 2.
 
-Se sair com 0, segue direto pra próxima operação. Se sair com **exit 2** (mensagem `AUTH_REQUIRED`), vá pro caso B.
-
-### Caso B — precisa logar (1ª vez na máquina, token expirou, etc.)
-
-**Não chame `claude-okr login` direto** — esse comando faz tudo dentro do Bash tool, e a URL pra autorizar fica escondida atrás de "Ctrl+O / expandir". O usuário não consegue acionar o navegador sem clicar pra expandir o output.
-
-**Em vez disso, siga este protocolo de 3 passos em sequência, mostrando a URL no chat:**
-
-**Passo 1 — gerar o código** (rápido, retorna JSON em STDOUT):
+**Passo 2 — Rode `login-start` em PRIMEIRO PLANO** (NÃO em background — é instantâneo, <2s):
 ```bash
 claude-okr login-start
 ```
-Saída esperada:
+Saída:
 ```json
 {
   "user_code": "ABCD-1234",
   "verification_uri": "https://okr.leveinovacao.com.br/cli-auth?code=ABCD-1234",
-  "expires_in_seconds": 600
+  "expires_in_seconds": 600,
+  "browser_opened": true
 }
 ```
+Esse comando **já tenta abrir o navegador** do usuário com `xdg-open`/`open`. Não rode em background.
 
-**Passo 2 — MOSTRAR A URL NO CHAT (NÃO dentro do Bash block):**
+**Passo 3 — IMEDIATAMENTE depois, MOSTRE A URL NO CHAT** (em markdown, fora de qualquer bloco de tool). Exemplo de mensagem ideal:
 
-Renderize uma mensagem clara e visível pro usuário, por exemplo:
-
-> 🔑 **Você precisa autorizar o plugin uma vez.**
+> 🔑 **Autorize o plugin uma vez:**
 >
-> Abra esta URL no navegador e clique em "Autorizar":
+> Abri o navegador. Se não abriu sozinho, abra: https://okr.leveinovacao.com.br/cli-auth?code=ABCD-1234
 >
-> https://okr.leveinovacao.com.br/cli-auth?code=ABCD-1234
->
-> Código: **ABCD-1234** (válido por 10 min)
->
-> Aguardando você autorizar...
+> Código: `ABCD-1234` (válido 10 min). Aguardando autorização...
 
-A URL precisa aparecer **fora** de bloco de código de tool — em texto markdown no chat normal. O usuário tem que ver e clicar sem precisar expandir nada.
+⚠️ **NÃO pule este passo. NÃO esconda a URL no Bash block.** Se a URL ficar só dentro do output do Bash, o usuário precisa clicar em "Ctrl+O / expandir" pra ver — UX horrível.
 
-**Passo 3 — esperar a aprovação** (polling, bloqueia até resolver):
+**Passo 4 — Rode `login-wait` (pode ser em background ou foreground):**
 ```bash
 claude-okr login-wait
 ```
-Quando o usuário clicar "Autorizar" no browser, esse comando termina com `✅ Autenticado como ...`. Daí prossiga com a operação original.
+Bloqueia até o usuário clicar "Autorizar" no browser. Termina com `✅ Autenticado como ...`. Daí retoma a operação original que tinha falhado.
 
-### Caso C — token salvo mas inválido (raro)
+### Casos de borda
 
-`claude-okr ensure-login` ou `claude-okr call` retorna `AUTH_REQUIRED: token inválido ou expirado`. Rode `claude-okr logout` e siga o caso B.
+- **Já autenticado** (caminho mais comum): `claude-okr ensure-login` sai com 0 silenciosamente. Pode pular pro próximo passo da operação direto.
+- **Token salvo mas inválido**: erros começam com `AUTH_REQUIRED: token salvo está inválido`. Rode `claude-okr logout` e siga o protocolo de 4 passos.
+- **Negado / código expirado**: `login-wait` morre com mensagem clara. Mostre o erro pro usuário e ofereça refazer (`login-start` de novo).
 
-### Restrição importante
+### Restrição
 
-Só emails `@leveinovacao.com.br` podem autorizar. Outras pessoas conseguem instalar o plugin mas o `/cli-auth/approve` recusa.
+Só emails `@leveinovacao.com.br` podem autorizar PAT. Outras pessoas conseguem instalar o plugin mas o `/cli-auth/approve` recusa.
 
-**Nunca faça curl direto com Bearer:** o helper `claude-okr call` injeta o token automaticamente e ainda revalida. Use sempre ele.
+**Nunca faça curl direto com Bearer:** o helper `claude-okr call` injeta o token e revalida. Use sempre ele.
 
 ## Projetos disponíveis
 
