@@ -7,19 +7,69 @@ description: Gerenciar tarefas no Leve OKR (plataforma interna da Leve Inovaçã
 
 Plataforma interna da Leve Inovação Estratégica para gerenciar OKRs e tarefas de projetos com clientes. Esta skill conversa com a Agent API do Leve OKR em `https://okr.leveinovacao.com.br` via o helper `claude-okr`.
 
-## Pré-requisito de toda chamada: autenticação
+## Pré-requisito: autenticação (UX crítica — leia com atenção)
 
-Antes de qualquer chamada à API, garanta que o usuário está autenticado via PAT (Personal Access Token), executando:
+Antes de qualquer chamada à API, garanta que o usuário está autenticado via PAT (Personal Access Token).
 
+### Caso A — já autenticado (caminho comum)
+
+Rode silenciosamente:
 ```bash
 claude-okr ensure-login
 ```
 
-- Se já houver credencial válida em `~/.config/leve-okr/credentials`, o comando retorna silencioso.
-- Se não houver, dispara um fluxo de OAuth no navegador (mostra URL com user_code), espera autorização e salva o token. **Mostre o output desse comando pro usuário** — é nele que ele vê a URL pra abrir.
-- Só permite emails `@leveinovacao.com.br`.
+Se sair com 0, segue direto pra próxima operação. Se sair com **exit 2** (mensagem `AUTH_REQUIRED`), vá pro caso B.
 
-**Nunca tente fazer curl direto com Bearer:** o helper `claude-okr call` injeta o token automaticamente e ainda revalida silenciosamente. Use sempre ele.
+### Caso B — precisa logar (1ª vez na máquina, token expirou, etc.)
+
+**Não chame `claude-okr login` direto** — esse comando faz tudo dentro do Bash tool, e a URL pra autorizar fica escondida atrás de "Ctrl+O / expandir". O usuário não consegue acionar o navegador sem clicar pra expandir o output.
+
+**Em vez disso, siga este protocolo de 3 passos em sequência, mostrando a URL no chat:**
+
+**Passo 1 — gerar o código** (rápido, retorna JSON em STDOUT):
+```bash
+claude-okr login-start
+```
+Saída esperada:
+```json
+{
+  "user_code": "ABCD-1234",
+  "verification_uri": "https://okr.leveinovacao.com.br/cli-auth?code=ABCD-1234",
+  "expires_in_seconds": 600
+}
+```
+
+**Passo 2 — MOSTRAR A URL NO CHAT (NÃO dentro do Bash block):**
+
+Renderize uma mensagem clara e visível pro usuário, por exemplo:
+
+> 🔑 **Você precisa autorizar o plugin uma vez.**
+>
+> Abra esta URL no navegador e clique em "Autorizar":
+>
+> https://okr.leveinovacao.com.br/cli-auth?code=ABCD-1234
+>
+> Código: **ABCD-1234** (válido por 10 min)
+>
+> Aguardando você autorizar...
+
+A URL precisa aparecer **fora** de bloco de código de tool — em texto markdown no chat normal. O usuário tem que ver e clicar sem precisar expandir nada.
+
+**Passo 3 — esperar a aprovação** (polling, bloqueia até resolver):
+```bash
+claude-okr login-wait
+```
+Quando o usuário clicar "Autorizar" no browser, esse comando termina com `✅ Autenticado como ...`. Daí prossiga com a operação original.
+
+### Caso C — token salvo mas inválido (raro)
+
+`claude-okr ensure-login` ou `claude-okr call` retorna `AUTH_REQUIRED: token inválido ou expirado`. Rode `claude-okr logout` e siga o caso B.
+
+### Restrição importante
+
+Só emails `@leveinovacao.com.br` podem autorizar. Outras pessoas conseguem instalar o plugin mas o `/cli-auth/approve` recusa.
+
+**Nunca faça curl direto com Bearer:** o helper `claude-okr call` injeta o token automaticamente e ainda revalida. Use sempre ele.
 
 ## Projetos disponíveis
 

@@ -34,10 +34,15 @@ Escritas (criar/atualizar/marcar) **sempre** pedem confirmação explícita ante
 O plugin instala o helper `claude-okr` no PATH:
 
 ```bash
-claude-okr login         # autentica via OAuth no navegador
+# uso humano (terminal interativo)
+claude-okr login         # faz tudo: gera código, mostra URL no STDERR, espera autorização
 claude-okr whoami        # mostra se está autenticado
 claude-okr logout        # remove credenciais locais
-claude-okr ensure-login  # garante que existe sessão válida
+
+# uso programático (Claude Code chama assim pra renderizar a URL no chat)
+claude-okr login-start   # retorna JSON com user_code + verification_uri (não bloqueia)
+claude-okr login-wait    # aguarda aprovação (bloqueia até resolver)
+claude-okr ensure-login  # exit 0 se ok; exit 2 + instruções se faltar
 claude-okr call GET /api/agent/projects
 ```
 

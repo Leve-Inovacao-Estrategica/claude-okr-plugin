@@ -5,16 +5,23 @@
 # obtido por OAuth device flow (a pessoa autoriza no navegador uma vez por máquina).
 #
 # Subcomandos:
-#   login           autentica via device flow e salva o PAT
-#   whoami          mostra o usuário associado ao PAT atual
-#   logout          remove o PAT local
-#   ensure-login    garante que existe um PAT válido (faz login se faltar)
+#   login                Faz o fluxo completo (start + wait). Útil pra uso manual no terminal.
+#   login-start          Apenas inicia o fluxo, retorna JSON com user_code e verification_uri.
+#                        Não bloqueia — o caller deve mostrar a URL ao usuário e em seguida
+#                        rodar `login-wait` pra esperar a aprovação.
+#   login-wait           Aguarda aprovação (polling) usando o deviceCode persistido por login-start.
+#                        Persiste o token quando aprovado.
+#   whoami               Mostra o usuário associado ao PAT atual
+#   logout               Remove o PAT local
+#   ensure-login         Sai com 0 se já autenticado; sai com erro instrutivo se não
+#                        (use login-start + login-wait pra resolver).
 #   call <method> <path> [<json-body>]
-#                   chama a API com o PAT atual (auto-faz login se faltar)
+#                        Chama a API com o PAT atual.
+#                        Erro instrutivo se não autenticado (não auto-loga — deixa o caller decidir).
 #
 # Convenções:
 #   - PAT salvo em $XDG_CONFIG_HOME/leve-okr/credentials (default ~/.config/leve-okr/credentials)
-#   - chmod 600 em todos os arquivos sensíveis
+#   - deviceCode pendente em $XDG_CONFIG_HOME/leve-okr/pending-device-code (chmod 600, removido após uso)
 #   - URL do OKR: variável OKR_BASE_URL (default https://okr.leveinovacao.com.br)
 #
 set -euo pipefail
@@ -22,6 +29,7 @@ set -euo pipefail
 OKR_BASE_URL="${OKR_BASE_URL:-https://okr.leveinovacao.com.br}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/leve-okr"
 CREDS_FILE="$CONFIG_DIR/credentials"
+PENDING_FILE="$CONFIG_DIR/pending-device-code"
 POLL_INTERVAL=3
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
@@ -53,35 +61,44 @@ save_token() {
   chmod 600 "$CREDS_FILE"
 }
 
-cmd_login() {
+# login-start: inicia o fluxo, imprime JSON em STDOUT, persiste deviceCode.
+cmd_login_start() {
   ensure_deps
   ensure_config_dir
   local client_name="${1:-Claude Code ($(hostname))}"
 
-  # 1. /start
-  local resp device_code user_code verification_url
+  local resp device_code
   resp=$(curl -fsS -X POST -H "Content-Type: application/json" \
     -d "$(python3 -c "import json,sys; print(json.dumps({'clientName': sys.argv[1]}))" "$client_name")" \
     "$OKR_BASE_URL/api/cli/auth/start") || die "Falha ao iniciar auth (verifique conexão com $OKR_BASE_URL)"
 
   device_code=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['deviceCode'])")
-  user_code=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['userCode'])")
-  verification_url=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['verificationUriComplete'])")
+  printf '%s' "$device_code" > "$PENDING_FILE"
+  chmod 600 "$PENDING_FILE"
 
-  cat >&2 <<EOF
+  # Saída pra Claude/usuário parsear — só os campos públicos, sem deviceCode
+  echo "$resp" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print(json.dumps({
+    'user_code': d['userCode'],
+    'verification_uri': d['verificationUriComplete'],
+    'expires_in_seconds': d['expiresIn'],
+}, indent=2))
+"
+}
 
-Para autorizar este plugin, abra a URL abaixo no navegador e clique em "Autorizar":
+# login-wait: aguarda aprovação. Usa deviceCode persistido (ou passado como arg).
+cmd_login_wait() {
+  ensure_deps
+  local device_code="${1:-}"
+  if [ -z "$device_code" ]; then
+    [ -f "$PENDING_FILE" ] || die "Sem deviceCode pendente. Rode 'claude-okr login-start' primeiro."
+    device_code=$(cat "$PENDING_FILE")
+  fi
 
-  $verification_url
-
-Código: $user_code   (válido por ~10 minutos)
-
-Aguardando autorização...
-EOF
-
-  # 2. polling
   local deadline=$(( $(date +%s) + 540 ))
-  local status token user_email user_name
+  local resp status token user_email user_name
   while [ "$(date +%s)" -lt "$deadline" ]; do
     resp=$(curl -fsS -X POST -H "Content-Type: application/json" \
       -d "$(python3 -c "import json,sys; print(json.dumps({'deviceCode': sys.argv[1]}))" "$device_code")" \
@@ -97,14 +114,17 @@ EOF
         user_email=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['user']['email'])")
         user_name=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['user']['name'])")
         save_token "$token"
-        printf 'Autenticado como %s (%s).\n' "$user_name" "$user_email" >&2
+        rm -f "$PENDING_FILE"
+        printf '✅ Autenticado como %s (%s).\n' "$user_name" "$user_email"
         return 0
         ;;
       denied)
+        rm -f "$PENDING_FILE"
         die "Autorização negada."
         ;;
       expired)
-        die "Código expirou. Rode 'claude-okr login' de novo."
+        rm -f "$PENDING_FILE"
+        die "Código expirou. Rode 'claude-okr login-start' de novo."
         ;;
       *)
         die "Resposta inesperada do servidor: $resp"
@@ -114,50 +134,104 @@ EOF
   die "Timeout aguardando autorização."
 }
 
+# login: legado/uso manual no terminal humano — combina start + wait.
+cmd_login() {
+  local client_name="${1:-Claude Code ($(hostname))}"
+  local start_json
+  start_json=$(cmd_login_start "$client_name")
+  local user_code verification_uri
+  user_code=$(echo "$start_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['user_code'])")
+  verification_uri=$(echo "$start_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['verification_uri'])")
+  cat >&2 <<EOF
+
+Para autorizar este plugin, abra a URL abaixo no navegador e clique em "Autorizar":
+
+  $verification_uri
+
+Código: $user_code   (válido por ~10 minutos)
+
+Aguardando autorização...
+EOF
+  cmd_login_wait
+}
+
 cmd_whoami() {
   local token
-  token=$(load_token 2>/dev/null) || die "Não autenticado. Rode 'claude-okr login' primeiro."
+  token=$(load_token 2>/dev/null) || die "Não autenticado. Rode 'claude-okr login-start' + 'claude-okr login-wait' (ou 'claude-okr login' manualmente)."
   local resp
   resp=$(curl -fsS -H "Authorization: Bearer $token" "$OKR_BASE_URL/api/agent/projects") \
-    || die "Token inválido ou expirado. Rode 'claude-okr login' de novo."
-  # Endpoint /projects não retorna usuário diretamente; pra simplificar,
-  # confirmamos que o token é aceito mostrando contagem de projetos.
+    || die "Token inválido ou expirado. Refaça o login."
   echo "$resp" | python3 -c "
 import json, sys
 projs = json.load(sys.stdin)
 n = len(projs) if isinstance(projs, list) else 0
-print(f'Token válido. {n} projeto(s) visível(eis) na sua conta.')
+print(f'Token válido. {n} projeto(s) visível(eis).')
 "
 }
 
 cmd_logout() {
-  if [ -f "$CREDS_FILE" ]; then
-    rm "$CREDS_FILE"
-    echo "Token removido."
+  local removed=0
+  [ -f "$CREDS_FILE" ] && rm "$CREDS_FILE" && removed=1
+  [ -f "$PENDING_FILE" ] && rm "$PENDING_FILE" && removed=1
+  if [ "$removed" -eq 1 ]; then
+    echo "Credenciais locais removidas."
   else
     echo "Nada a remover."
   fi
 }
 
+# ensure-login: sai com 0 se já autenticado, exit 2 (instrutivo) se não.
+# NÃO auto-loga — o caller (Claude) deve mostrar a URL ao usuário antes de fazer login.
 cmd_ensure_login() {
   local token
   if token=$(load_token 2>/dev/null); then
-    # Verifica que o token ainda é válido com uma chamada leve
     if curl -fsS -o /dev/null -H "Authorization: Bearer $token" "$OKR_BASE_URL/api/agent/projects"; then
+      echo "ok: token válido"
       return 0
     fi
     echo "Token salvo está inválido — refazendo login." >&2
   fi
-  cmd_login
+  cat <<'EOF' >&2
+AUTH_REQUIRED: você precisa rodar o fluxo de login.
+
+Passo 1 (gera URL):
+    claude-okr login-start
+
+Passo 2 (mostre a "verification_uri" do JSON acima pro usuário) — o usuário abre a URL no navegador, loga com Google da Leve e clica em "Autorizar".
+
+Passo 3 (espera aprovação):
+    claude-okr login-wait
+
+Pra uso manual no terminal humano, o atalho é:
+    claude-okr login
+EOF
+  exit 2
 }
 
 cmd_call() {
-  cmd_ensure_login >&2
+  local token
+  token=$(load_token 2>/dev/null) || {
+    cat <<'EOF' >&2
+AUTH_REQUIRED: não autenticado. Antes de chamar a API:
+
+    claude-okr login-start    # retorna JSON com a URL/código pra mostrar ao usuário
+    claude-okr login-wait     # aguarda aprovação
+
+Depois, repita esta chamada.
+EOF
+    exit 2
+  }
+  # Revalida o token rapidamente — se inválido, instrui re-login (não auto-loga)
+  if ! curl -fsS -o /dev/null -H "Authorization: Bearer $token" "$OKR_BASE_URL/api/agent/projects"; then
+    cat <<'EOF' >&2
+AUTH_REQUIRED: token salvo está inválido ou expirado. Rode 'claude-okr logout' e em seguida login-start + login-wait.
+EOF
+    exit 2
+  fi
+
   local method="${1:?'método HTTP necessário'}"
   local path="${2:?'caminho necessário (ex: /api/agent/projects)'}"
   local body="${3:-}"
-  local token
-  token=$(load_token) || die "Sem token (após ensure-login?). Inconsistência interna."
 
   local url
   if [[ "$path" == http* ]]; then
@@ -184,6 +258,8 @@ main() {
   shift || true
   case "$cmd" in
     login)        cmd_login "$@" ;;
+    login-start)  cmd_login_start "$@" ;;
+    login-wait)   cmd_login_wait "$@" ;;
     whoami)       cmd_whoami ;;
     logout)       cmd_logout ;;
     ensure-login) cmd_ensure_login ;;
@@ -192,16 +268,21 @@ main() {
       cat <<EOF
 claude-okr — CLI do plugin okr para Claude Code
 
-Uso:
-  claude-okr login            Autentica via OAuth no navegador (uma vez por máquina)
-  claude-okr whoami           Mostra se está autenticado
-  claude-okr logout           Remove credenciais locais
-  claude-okr ensure-login     Garante que existe sessão válida (auto-login se faltar)
+Uso (programático, recomendado pro Claude usar):
+  claude-okr login-start          Inicia auth, devolve JSON com URL+código.
+                                  Mostre a URL ao usuário, então rode login-wait.
+  claude-okr login-wait           Aguarda aprovação. Persiste o token quando aprovado.
+  claude-okr ensure-login         Verifica auth. Exit 2 com instruções se faltar.
   claude-okr call <METHOD> <PATH> [<JSON_BODY>]
-                              Chama API autenticada. PATH pode começar com / ou ser URL completa.
+                                  Chama API. Exit 2 com instruções se faltar auth.
+
+Uso (humano, manual no terminal):
+  claude-okr login                Faz tudo (start + mostra URL no STDERR + wait).
+  claude-okr whoami               Mostra se está autenticado.
+  claude-okr logout               Remove credenciais locais.
 
 Variáveis:
-  OKR_BASE_URL                Default: https://okr.leveinovacao.com.br
+  OKR_BASE_URL                    Default: https://okr.leveinovacao.com.br
 EOF
       ;;
     *)
