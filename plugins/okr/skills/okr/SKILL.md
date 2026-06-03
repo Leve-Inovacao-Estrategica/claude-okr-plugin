@@ -92,6 +92,7 @@ Retorna `{ id, name, email, role }` dos usuários ativos. Faça o match por nome
 GET   /api/agent/projects                                              → lista projetos (fonte de verdade dos slugs)
 GET   /api/agent/users?status=ACTIVE                                   → lista usuários (resolução nome→email)
 GET   /api/agent/goals?projectToken=...                                → metas/OKRs do projeto (progresso + contagem de tarefas)
+POST  /api/agent/goals/{id}/checkin                                    → registrar progresso de uma meta (atualiza currentValue)
 GET   /api/agent/tasks?projectToken=...&status=...&responsibleEmail=...&dueBefore=YYYY-MM-DD
 GET   /api/agent/tasks/{id}                                             → detalhe
 POST  /api/agent/tasks                                                  → criar em lote
@@ -196,6 +197,32 @@ Como apresentar:
 - Se o usuário quiser, relacione com as tarefas: `taskCounts` já diz quantas faltam por meta.
 
 > Distinga **meta** de **tarefa**: meta é o objetivo macro (Goal); tarefa é o item de trabalho. "Como está a meta X" → `/api/agent/goals`. "O que falta fazer no projeto" → `/api/agent/tasks`.
+
+### 📈 Check-in de progresso de meta (escrita — **SEMPRE confirme antes**)
+
+Para "registra que o faturamento do Gestou chegou em R$ 3.500" / "atualiza a meta X pra 60 clientes".
+
+⚠️ **`value` é o valor ABSOLUTO atual da meta, não um incremento.** O backend faz `currentValue = value`.
+- Se o usuário der um valor absoluto ("chegou em 3500"), use-o direto.
+- Se o usuário falar em **incremento** ("subiu 500", "fechamos mais 2 clientes"), **primeiro leia a meta** via `GET /api/agent/goals` pra pegar o `currentValue` atual, **some**, e use o total. Mostre a conta no preview.
+
+Fluxo:
+1. Resolva a meta (liste via `/api/agent/goals` e ache por título) — pegue o `id`.
+2. Preview com a conta explícita:
+   ```
+   Check-in na meta "Faturamento" (Gestou):
+     currentValue 2600 → 3500 R$  (= 70% de 5000)
+   Confirma? (s/n)
+   ```
+3. Espere confirmação.
+4. Execute:
+```bash
+claude-okr call POST /api/agent/goals/cml9...apdt/checkin '{"value": 3500, "notes": "via plugin"}'
+```
+
+Campos: `value` (number, obrigatório), `notes` (opcional), `weekNumber` (opcional — auto-calculado pela semana atual se omitido). A resposta traz a meta atualizada com `progressPct` novo — confirme pro usuário ("meta agora em 70%").
+
+> O check-in **não** muda o `status` da meta (ON_TRACK/AT_RISK/…). Se o usuário quiser mudar o status, isso é outra operação (não suportada por agora — avise).
 
 ## Regras de qualidade
 
