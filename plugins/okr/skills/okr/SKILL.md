@@ -1,6 +1,6 @@
 ---
 name: okr
-description: Gerenciar tarefas no Leve OKR (plataforma interna da Leve Inovação Estratégica). Use quando o usuário pedir para listar/criar/atualizar/concluir tarefas ou mencionar projetos da Leve por nome ou apelido (ex.: Santa Maria Outlet/SMO, SOL Engrenagens/SOL, EW, Precifica, Compras White Label, Gestou — entre outros; a lista real vem da API, não é fixa). TRIGGER quando o usuário disser coisas como "adicionar tarefa", "criar tarefa", "marcar como feito", "marcar como concluída", "listar tarefas", "tarefas pendentes do X", "o que falta no X", "status do projeto X". SKIP quando o pedido não envolver tarefas/projetos da Leve OKR.
+description: Gerenciar tarefas e metas/OKRs no Leve OKR (plataforma interna da Leve Inovação Estratégica). Use quando o usuário pedir para listar/criar/atualizar/concluir tarefas, consultar metas/objetivos/OKRs e seu progresso, ou mencionar projetos da Leve por nome ou apelido (ex.: Santa Maria Outlet/SMO, SOL Engrenagens/SOL, EW, Precifica, Compras White Label, Gestou — entre outros; a lista real vem da API, não é fixa). TRIGGER quando o usuário disser coisas como "adicionar tarefa", "criar tarefa", "marcar como feito", "marcar como concluída", "listar tarefas", "tarefas pendentes do X", "o que falta no X", "status do projeto X", "como estão as metas do X", "progresso do objetivo Y", "tem meta em risco". SKIP quando o pedido não envolver tarefas/metas/projetos da Leve OKR.
 ---
 
 # OKR — Leve OKR task management
@@ -91,6 +91,7 @@ Retorna `{ id, name, email, role }` dos usuários ativos. Faça o match por nome
 ```
 GET   /api/agent/projects                                              → lista projetos (fonte de verdade dos slugs)
 GET   /api/agent/users?status=ACTIVE                                   → lista usuários (resolução nome→email)
+GET   /api/agent/goals?projectToken=...                                → metas/OKRs do projeto (progresso + contagem de tarefas)
 GET   /api/agent/tasks?projectToken=...&status=...&responsibleEmail=...&dueBefore=YYYY-MM-DD
 GET   /api/agent/tasks/{id}                                             → detalhe
 POST  /api/agent/tasks                                                  → criar em lote
@@ -173,6 +174,28 @@ Para "como está o SMO":
 2. Agrupar por status
 3. Apresentar `X pendentes, Y em andamento, Z concluídas (de N total)`
 4. Listar as 3-5 atrasadas (status ≠ COMPLETED && dueDate < hoje) se houver
+
+### 🎯 Metas / OKRs (leitura — direto)
+
+Para perguntas sobre **objetivos/metas/OKR** (não tarefas): "como estão as metas do Gestou?", "qual o progresso do faturamento?", "tem alguma meta em risco?".
+
+```bash
+claude-okr call GET '/api/agent/goals?projectToken=gestou-2026'
+```
+
+Cada meta retorna:
+- `title`, `targetValue`/`currentValue`/`unit`, `progressPct` (já calculado; **`null` quando não há alvo numérico**)
+- `status`: `ON_TRACK` | `AT_RISK` | `BEHIND` | `COMPLETED`
+- `dueDate`, `responsible`
+- `taskCounts`: `{ pending, in_progress, completed, total }` das tarefas vinculadas
+
+Como apresentar:
+- Uma linha por meta: `título — currentValue/targetValue unit (progressPct%) — status — responsável`.
+- **Destaque** as metas `AT_RISK`/`BEHIND` (ex: ⚠️) — é o que mais interessa.
+- Se `progressPct` for `null`, mostre só `currentValue` (meta sem alvo numérico) sem inventar porcentagem.
+- Se o usuário quiser, relacione com as tarefas: `taskCounts` já diz quantas faltam por meta.
+
+> Distinga **meta** de **tarefa**: meta é o objetivo macro (Goal); tarefa é o item de trabalho. "Como está a meta X" → `/api/agent/goals`. "O que falta fazer no projeto" → `/api/agent/tasks`.
 
 ## Regras de qualidade
 
