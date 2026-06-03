@@ -52,19 +52,15 @@ Token salvo em `~/.config/leve-okr/credentials` (chmod 600). Não é commitado e
 
 Pra revogar do lado servidor: peça pro administrador deletar a linha correspondente em `ApiToken` no banco do Leve OKR.
 
-## Projetos & apelidos suportados
+## Projetos suportados
 
-| Slug | Cliente | Apelidos |
-|---|---|---|
-| `smo-2026` | Santa Maria Outlet | SMO, santa maria, outlet |
-| `sol-2026` | SOL Engrenagens | SOL |
-| `ew-2026` | EW Incorporadora | EW |
-| `precifica-2026` | Precifica Simples | Precifica |
-| `compras-2026` | Sistema de Compras (White Label) | Compras |
-| `gestou-2026` | Gestou | Gestou |
-| `podpratas-2026` | POD Pratas925 | POD, pratas |
+A lista de projetos **não é fixa** — vem do banco em tempo real. Pra ver os projetos atuais e seus slugs:
 
-> O slug é o `agentSlug` do projeto no banco — independente do `publicToken` (portal público), que pode permanecer NULL. Plugin **não** ativa portais públicos.
+```bash
+claude-okr call GET /api/agent/projects
+```
+
+O plugin resolve o que você fala (nome ou apelido) contra esse retorno. O slug é o `agentSlug` do projeto no banco — independente do `publicToken` (portal público), que pode permanecer NULL. O plugin **não** ativa portais públicos.
 
 ## Restrição
 

@@ -1,6 +1,6 @@
 ---
 name: okr
-description: Gerenciar tarefas no Leve OKR (plataforma interna da Leve Inovação Estratégica). Use quando o usuário pedir para listar/criar/atualizar/concluir tarefas, mencionar projetos por nome (Santa Maria Outlet, SOL Engrenagens, EW Incorporadora, Precifica Simples, Compras White Label, Gestou, POD Pratas925) ou seus apelidos curtos (SMO, SOL, EW, Precifica, Compras, Gestou, POD). TRIGGER quando o usuário disser coisas como "adicionar tarefa", "criar tarefa", "marcar como feito", "marcar como concluída", "listar tarefas", "tarefas pendentes do X", "o que falta no X", "status do projeto X". SKIP quando o pedido não envolver tarefas/projetos da Leve OKR.
+description: Gerenciar tarefas no Leve OKR (plataforma interna da Leve Inovação Estratégica). Use quando o usuário pedir para listar/criar/atualizar/concluir tarefas ou mencionar projetos da Leve por nome ou apelido (ex.: Santa Maria Outlet/SMO, SOL Engrenagens/SOL, EW, Precifica, Compras White Label, Gestou — entre outros; a lista real vem da API, não é fixa). TRIGGER quando o usuário disser coisas como "adicionar tarefa", "criar tarefa", "marcar como feito", "marcar como concluída", "listar tarefas", "tarefas pendentes do X", "o que falta no X", "status do projeto X". SKIP quando o pedido não envolver tarefas/projetos da Leve OKR.
 ---
 
 # OKR — Leve OKR task management
@@ -58,41 +58,39 @@ Só emails `@leveinovacao.com.br` podem autorizar PAT. Outras pessoas conseguem 
 
 **Nunca faça curl direto com Bearer:** o helper `claude-okr call` injeta o token e revalida. Use sempre ele.
 
-## Projetos disponíveis
+## Projetos (resolução dinâmica — NÃO hardcode)
 
-Slugs estáveis dos projetos (resolva por apelido quando o usuário falar nome livre):
+A lista de projetos vive no banco e muda. **Sempre** resolva o projeto consultando a API, nunca uma tabela memorizada:
 
-| Slug | Cliente | Apelidos comuns |
-|---|---|---|
-| `smo-2026` | Santa Maria Outlet | SMO, santa maria, outlet |
-| `sol-2026` | SOL Engrenagens | SOL, sol engrenagens |
-| `ew-2026` | EW Incorporadora | EW, EW Incorporações |
-| `precifica-2026` | Precifica Simples | Precifica |
-| `compras-2026` | Sistema de Compras (White Label) | Compras, white label |
-| `gestou-2026` | Gestou | Gestou |
-| `podpratas-2026` | POD Pratas925 | POD, POD Pratas, pratas |
+```bash
+claude-okr call GET /api/agent/projects
+```
 
-Em caso de ambiguidade, confirme com o usuário antes de prosseguir.
+Cada item traz `name`, `agentSlug`, `color` e `_count` de tasks/goals. Faça o match entre o que o usuário falou (nome livre ou apelido, ex: "SMO", "outlet", "santa maria") e o `name`/`agentSlug` retornado, e use o `agentSlug` como `projectToken` nas demais chamadas.
 
-> O slug corresponde ao campo `agentSlug` no `Project` do banco — independente do `publicToken` (portal público), que pode continuar desligado. A Agent API resolve `?projectToken=...` em qualquer um dos dois campos.
+- Cacheie o resultado dentro da mesma conversa pra não repetir a chamada a cada operação.
+- Em caso de ambiguidade (mais de um match plausível), liste os candidatos e **confirme com o usuário** antes de prosseguir.
 
-## Usuários conhecidos (resolução de email)
+> `agentSlug` é o campo do `Project` no banco — independente do `publicToken` (portal público), que pode continuar desligado. A Agent API resolve `?projectToken=...` tanto por `agentSlug` quanto por `publicToken`.
 
-Quando o usuário citar uma pessoa pelo primeiro nome, mapeie pra um email:
+## Usuários / responsáveis (resolução dinâmica — NÃO hardcode)
 
-| Nome | Email |
-|---|---|
-| Rafael / Rafa | rafael@leveinovacao.com.br |
-| Yuri | yuri@leveinovacao.com.br |
-| João / João Pedro / JP | joao@leveinovacao.com.br *(confirmar exato)* |
-| Guilherme / Gui | guilherme@leveinovacao.com.br *(confirmar exato)* |
+Pessoas e emails também vêm do banco. Pra mapear um primeiro nome ("Rafael", "Yuri", "João", "Gui") num email/responsável, consulte:
 
-Se o usuário não especificar responsável ao **criar** uma tarefa, assuma que é pra ele mesmo (o backend resolve pelo dono do PAT, então é automático — não precisa passar `responsibleEmail`).
+```bash
+claude-okr call GET /api/agent/users
+```
+
+Retorna `{ id, name, email, role }` dos usuários ativos. Faça o match por nome e use o `email` como `responsibleEmail`. Se houver mais de um match plausível, confirme com o usuário.
+
+- Cacheie na mesma conversa.
+- Se o usuário **não** especificar responsável ao criar uma tarefa, não precisa resolver nada: o backend atribui automaticamente ao dono do PAT. Só consulte `/api/agent/users` quando ele citar **outra** pessoa.
 
 ## Endpoints disponíveis
 
 ```
-GET   /api/agent/projects                                              → lista projetos
+GET   /api/agent/projects                                              → lista projetos (fonte de verdade dos slugs)
+GET   /api/agent/users?status=ACTIVE                                   → lista usuários (resolução nome→email)
 GET   /api/agent/tasks?projectToken=...&status=...&responsibleEmail=...&dueBefore=YYYY-MM-DD
 GET   /api/agent/tasks/{id}                                             → detalhe
 POST  /api/agent/tasks                                                  → criar em lote
