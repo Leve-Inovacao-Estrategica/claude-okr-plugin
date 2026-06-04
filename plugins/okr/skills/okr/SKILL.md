@@ -95,8 +95,8 @@ GET   /api/agent/goals?projectToken=...                                → metas
 POST  /api/agent/goals/{id}/checkin                                    → registrar progresso de uma meta (atualiza currentValue)
 GET   /api/agent/tasks?projectToken=...&status=...&responsibleEmail=...&dueBefore=YYYY-MM-DD
 GET   /api/agent/tasks/{id}                                             → detalhe
-POST  /api/agent/tasks                                                  → criar em lote
-PATCH /api/agent/tasks/{id}                                             → atualizar (status, dueDate, responsibleEmail, title, description)
+POST  /api/agent/tasks                                                  → criar em lote (cada task exige goalId OU goalTitle)
+PATCH /api/agent/tasks/{id}                                             → atualizar (status, dueDate, responsibleEmail, title, description, goalId/goalTitle p/ mover de meta)
 ```
 
 Sempre via `claude-okr call <METHOD> <PATH> [<JSON_BODY>]`.
@@ -117,30 +117,41 @@ Para "minhas tarefas pendentes em todos os projetos": liste projetos primeiro, d
 
 ### ➕ Criar tarefa (escrita — **SEMPRE confirme antes**)
 
+> ⚠️ **Toda tarefa precisa de uma meta.** O backend é estrito: `POST` sem `goalId`/`goalTitle`
+> resolvível devolve `400` (com a lista de metas disponíveis no corpo). Resolva a meta ANTES.
+
 Fluxo obrigatório:
 
-1. **Monte o payload** com base no pedido do usuário
-2. **Mostre preview** em formato legível:
+1. **Descubra a meta.** Liste as metas do projeto:
+   ```bash
+   claude-okr call GET '/api/agent/goals?projectToken=smo-2026'
    ```
-   Vou criar essas tarefas em SMO:
+   - Se o usuário **indicou** a meta (por nome), case com a lista e use o `id` (campo `goalId`).
+   - Se **não indicou**, **pergunte qual meta** antes de prosseguir — não invente nem escolha sozinho.
+2. **Monte o payload** com `goalId` (preferencial) ou `goalTitle` (match exato do título no projeto) em cada task.
+3. **Mostre preview** em formato legível, incluindo a meta:
+   ```
+   Vou criar essas tarefas em SMO › meta "Aumentar faturamento Q2":
      • "Revisar plano comercial" — responsável: Rafael — prazo: 2026-05-30
      • "Apresentação Q2" — responsável: Yuri — prazo: 2026-06-15
-   
+
    Confirma? (s/n)
    ```
-3. **Espere "s", "sim", "ok", "confirmo"** antes de executar
-4. **Execute** apenas se confirmado:
+4. **Espere "s", "sim", "ok", "confirmo"** antes de executar
+5. **Execute** apenas se confirmado:
 
 ```bash
 claude-okr call POST /api/agent/tasks '{
   "projectToken": "smo-2026",
   "tasks": [
-    {"title": "Revisar plano comercial", "dueDate": "2026-05-30", "origin": "claude-code-plugin"}
+    {"title": "Revisar plano comercial", "goalId": "cmxxxx...", "dueDate": "2026-05-30", "origin": "claude-code-plugin"}
   ]
 }'
 ```
 
 Notas:
+- **`goalId`/`goalTitle` é obrigatório** em cada task — sem isso o backend rejeita (400). Cada task pode ir pra uma meta diferente.
+- `goalId` é o caminho seguro; `goalTitle` é conveniência (match exato case-insensitive; se ambíguo, o backend pede `goalId`).
 - Sempre marque `"origin": "claude-code-plugin"` (diferencia tarefas criadas via plugin de outras fontes)
 - Quando não há responsibleEmail explícito, o backend atribui automaticamente ao dono do PAT — não precisa passar
 - Para atribuir a outra pessoa, inclua `"responsibleEmail": "fulano@leveinovacao.com.br"` na task
@@ -166,7 +177,7 @@ claude-okr call PATCH /api/agent/tasks/{id} '{"status": "COMPLETED"}'
 
 ### 🔄 Atualizar tarefa (escrita — **SEMPRE confirme antes**)
 
-Campos suportados em PATCH: `status` (PENDING|IN_PROGRESS|COMPLETED), `dueDate` (YYYY-MM-DD ou null), `responsibleEmail` (resolve User; null disconnect), `responsibleName`, `title`, `description`. Mesma lógica de preview → confirma → executa.
+Campos suportados em PATCH: `status` (PENDING|IN_PROGRESS|COMPLETED), `dueDate` (YYYY-MM-DD ou null), `responsibleEmail` (resolve User; null disconnect), `responsibleName`, `title`, `description`, `goalId`/`goalTitle` (move a tarefa pra outra meta — a meta-alvo precisa ser do mesmo projeto). Mesma lógica de preview → confirma → executa.
 
 ### 📊 Status do projeto (leitura — direto)
 
