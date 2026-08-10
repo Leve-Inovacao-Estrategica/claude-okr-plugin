@@ -94,12 +94,23 @@ GET   /api/agent/users?status=ACTIVE                                   → lista
 GET   /api/agent/goals?projectToken=...                                → metas/OKRs do projeto (progresso + contagem de tarefas)
 POST  /api/agent/goals/{id}/checkin                                    → registrar progresso de uma meta (atualiza currentValue)
 GET   /api/agent/tasks?projectToken=...&status=...&responsibleEmail=...&dueBefore=YYYY-MM-DD
-GET   /api/agent/tasks/{id}                                             → detalhe
+GET   /api/agent/tasks/{id}                                             → detalhe (inclui histórico de `actions`)
 POST  /api/agent/tasks                                                  → criar em lote (cada task exige goalId OU goalTitle)
 PATCH /api/agent/tasks/{id}                                             → atualizar (status, dueDate, responsibleEmail, title, description, goalId/goalTitle p/ mover de meta)
+GET   /api/agent/tasks/{id}/actions                                     → listar ações executadas na tarefa
+POST  /api/agent/tasks/{id}/actions                                     → registrar ação executada na tarefa
 ```
 
 Sempre via `claude-okr call <METHOD> <PATH> [<JSON_BODY>]`.
+
+### Identificador curto `#code`
+
+Toda tarefa tem um `code` numérico curto e único (ex.: `#123`), retornado em todas as
+respostas e exibido no painel. Em **qualquer** rota `/api/agent/tasks/{id}...`, o `{id}`
+aceita tanto o cuid quanto o `code` (`PATCH /api/agent/tasks/123 ...`).
+
+- Ao **listar** tarefas pro usuário, mostre sempre o `#code` junto do título — é assim que a equipe se refere às tarefas.
+- Se o usuário citar uma tarefa por `#123`, chame a API direto com `123` — **não precisa buscar por título**.
 
 ## Operações
 
@@ -178,6 +189,31 @@ claude-okr call PATCH /api/agent/tasks/{id} '{"status": "COMPLETED"}'
 ### 🔄 Atualizar tarefa (escrita — **SEMPRE confirme antes**)
 
 Campos suportados em PATCH: `status` (PENDING|IN_PROGRESS|COMPLETED), `dueDate` (YYYY-MM-DD ou null), `responsibleEmail` (resolve User; null disconnect), `responsibleName`, `title`, `description`, `goalId`/`goalTitle` (move a tarefa pra outra meta — a meta-alvo precisa ser do mesmo projeto). Mesma lógica de preview → confirma → executa.
+
+### 🧾 Registrar ação numa tarefa (escrita — **SEMPRE confirme antes**)
+
+**Ação** é o registro do que foi feito na tarefa (quem fez, quando, o quê) — separado da
+descrição, que fica só com o enunciado. **Nunca** anexe progresso na `description` via
+PATCH; registre uma ação.
+
+Use quando o usuário disser "registra que eu fiz X na tarefa", "adiciona uma ação", ou ao
+**fechar uma sessão de trabalho** que tocou uma tarefa do OKR (ofereça: "quer que eu registre
+o que foi feito como ação na tarefa #N?").
+
+Fluxo:
+1. Resolva a tarefa (por `#code` direto, ou busca por título como em "marcar como concluída").
+2. Preview do texto da ação (resumo objetivo do que foi executado; pode ser mais de um parágrafo).
+3. Espere confirmação.
+4. Execute:
+```bash
+claude-okr call POST /api/agent/tasks/123/actions '{"content": "Implementei o endpoint X e subi pra revisão. Falta atualizar a doc."}'
+```
+
+Notas:
+- O autor da ação é automaticamente o dono do PAT — não precisa passar nada. `authorName` (opcional) só quando a ação foi executada por outra pessoa sem User na plataforma.
+- `content` aceita texto puro (com quebras de linha) ou HTML simples, mesmo formato da descrição.
+- Ao concluir uma tarefa que teve trabalho relevante, o ideal é o combo: `POST .../actions` (o que foi feito) + `PATCH` `{"status": "COMPLETED"}` — nos dois com uma única confirmação.
+- Pra **ler** o histórico ("o que já foi feito na #123?"): `GET /api/agent/tasks/123` (vem com `actions`) ou `GET /api/agent/tasks/123/actions`. Apresente como linha do tempo: `autor — data: resumo`.
 
 ### 📊 Status do projeto (leitura — direto)
 
