@@ -92,7 +92,7 @@ Retorna `{ id, name, email, role }` dos usuários ativos. Faça o match por nome
 GET   /api/agent/projects                                              → lista projetos (fonte de verdade dos slugs)
 GET   /api/agent/users?status=ACTIVE                                   → lista usuários (resolução nome→email)
 GET   /api/agent/goals?projectToken=...                                → metas/OKRs do projeto (progresso + contagem de tarefas)
-POST  /api/agent/goals/{id}/checkin                                    → registrar progresso de uma meta (atualiza currentValue)
+POST  /api/agent/goals/{id}/checkin                                    → check-in (AUTO: nota qualitativa; MANUAL: value absoluto → currentValue)
 GET   /api/agent/tasks?projectToken=...&status=...&responsibleEmail=...&dueBefore=YYYY-MM-DD
 GET   /api/agent/tasks/{id}                                             → detalhe
 POST  /api/agent/tasks                                                  → criar em lote (cada task exige goalId OU goalTitle)
@@ -196,29 +196,36 @@ claude-okr call GET '/api/agent/goals?projectToken=gestou-2026'
 ```
 
 Cada meta retorna:
-- `title`, `targetValue`/`currentValue`/`unit`, `progressPct` (já calculado; **`null` quando não há alvo numérico**)
-- `status`: `ON_TRACK` | `AT_RISK` | `BEHIND` | `COMPLETED`
+- `title`, `targetValue`/`currentValue`/`unit`, `progressPct`, e **`progressMode`: `AUTO` ou `MANUAL`** — decide como a completude é obtida e como o check-in funciona nessa meta específica:
+  - **`AUTO`** (metas de execução, `unit` = `"tarefas"`): `currentValue`/`targetValue` são tarefas concluídas/total, recalculados a cada mutação de tarefa. `progressPct` é `null` só quando a meta ainda não tem nenhuma tarefa.
+  - **`MANUAL`** (métricas de negócio: R$, clientes, leads, projetos, %): `currentValue`/`targetValue`/`unit` são o valor de negócio informado manualmente via check-in — igual sempre foi.
+- `status`: `ON_TRACK` | `AT_RISK` | `BEHIND` | `COMPLETED` — em metas `AUTO`, `COMPLETED` também é automático (100% das tarefas); em `MANUAL` é sempre manual. Os demais status continuam manuais em ambos os modos.
 - `dueDate`, `responsible`
-- `taskCounts`: `{ pending, in_progress, completed, total }` das tarefas vinculadas
+- `taskCounts`: `{ pending, in_progress, completed, total }` das tarefas vinculadas (é a fonte do `progressPct` só em metas `AUTO`)
 
 Como apresentar:
 - Uma linha por meta: `título — currentValue/targetValue unit (progressPct%) — status — responsável`.
 - **Destaque** as metas `AT_RISK`/`BEHIND` (ex: ⚠️) — é o que mais interessa.
-- Se `progressPct` for `null`, mostre só `currentValue` (meta sem alvo numérico) sem inventar porcentagem.
-- Se o usuário quiser, relacione com as tarefas: `taskCounts` já diz quantas faltam por meta.
+- Se `progressPct` for `null`, mostre só `currentValue` (meta `MANUAL` sem alvo numérico, ou `AUTO` sem tarefas ainda) sem inventar porcentagem.
 
 > Distinga **meta** de **tarefa**: meta é o objetivo macro (Goal); tarefa é o item de trabalho. "Como está a meta X" → `/api/agent/goals`. "O que falta fazer no projeto" → `/api/agent/tasks`.
 
-### 📈 Check-in de progresso de meta (escrita — **SEMPRE confirme antes**)
+### 📈 Check-in de meta (escrita — comportamento depende de `progressMode`)
 
-Para "registra que o faturamento do Gestou chegou em R$ 3.500" / "atualiza a meta X pra 60 clientes".
+**Sempre confira `progressMode` da meta primeiro** (via `/api/agent/goals`) antes de montar o check-in — o body é diferente em cada modo:
 
-⚠️ **`value` é o valor ABSOLUTO atual da meta, não um incremento.** O backend faz `currentValue = value`.
+**Meta `AUTO`** — completude vem das tarefas; check-in é só uma nota qualitativa da semana, sem `value`. Use para "registra um check-in na meta X: fechamos a integração, falta só o teste final".
+```bash
+claude-okr call POST /api/agent/goals/cml9...apdt/checkin '{"notes": "via plugin"}'
+```
+Sem confirmação prévia — não altera nenhum valor, só anexa a nota (o `progressPct` do momento é anexado automaticamente como snapshot).
+
+**Meta `MANUAL`** — para "registra que o faturamento do Gestou chegou em R$ 3.500" / "atualiza a meta X pra 60 clientes". **`value` é obrigatório e é o valor ABSOLUTO atual da meta, não um incremento** — o backend faz `currentValue = value`.
 - Se o usuário der um valor absoluto ("chegou em 3500"), use-o direto.
-- Se o usuário falar em **incremento** ("subiu 500", "fechamos mais 2 clientes"), **primeiro leia a meta** via `GET /api/agent/goals` pra pegar o `currentValue` atual, **some**, e use o total. Mostre a conta no preview.
+- Se falar em **incremento** ("subiu 500", "fechamos mais 2 clientes"), **primeiro leia a meta** via `/api/agent/goals` pra pegar o `currentValue` atual, some, e use o total. Mostre a conta no preview.
 
-Fluxo:
-1. Resolva a meta (liste via `/api/agent/goals` e ache por título) — pegue o `id`.
+Fluxo (metas `MANUAL`, **sempre confirme antes** — é diferente do fluxo `AUTO`):
+1. Resolva a meta e confirme que `progressMode` é `MANUAL`.
 2. Preview com a conta explícita:
    ```
    Check-in na meta "Faturamento" (Gestou):
@@ -231,9 +238,9 @@ Fluxo:
 claude-okr call POST /api/agent/goals/cml9...apdt/checkin '{"value": 3500, "notes": "via plugin"}'
 ```
 
-Campos: `value` (number, obrigatório), `notes` (opcional), `weekNumber` (opcional — auto-calculado pela semana atual se omitido). A resposta traz a meta atualizada com `progressPct` novo — confirme pro usuário ("meta agora em 70%").
+Campos comuns: `notes` (opcional em `AUTO`, mas é o motivo de existir do check-in ali — peça se o usuário não deu contexto; opcional em `MANUAL`), `weekNumber` (opcional — auto-calculado pela semana atual se omitido).
 
-> O check-in **não** muda o `status` da meta (ON_TRACK/AT_RISK/…). Se o usuário quiser mudar o status, isso é outra operação (não suportada por agora — avise).
+> O check-in **não** muda o `status` da meta (ON_TRACK/AT_RISK/…) em nenhum dos dois modos. Se o usuário quiser mudar o status, isso é outra operação (não suportada por agora — avise).
 
 ## Regras de qualidade
 
