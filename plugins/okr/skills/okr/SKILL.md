@@ -94,12 +94,25 @@ GET   /api/agent/users?status=ACTIVE                                   → lista
 GET   /api/agent/goals?projectToken=...                                → metas/OKRs do projeto (progresso + contagem de tarefas)
 POST  /api/agent/goals/{id}/checkin                                    → check-in (AUTO: nota qualitativa; MANUAL: value absoluto → currentValue)
 GET   /api/agent/tasks?projectToken=...&status=...&responsibleEmail=...&dueBefore=YYYY-MM-DD
-GET   /api/agent/tasks/{id}                                             → detalhe
-POST  /api/agent/tasks                                                  → criar em lote (cada task exige goalId OU goalTitle)
+      &completedAfter=YYYY-MM-DD&completedBefore=YYYY-MM-DD             → janela de CONCLUSÃO (lista da daily)
+GET   /api/agent/tasks/{id}                                             → detalhe (inclui o array `actions`)
+POST  /api/agent/tasks                                                  → criar em lote (body: {projectToken, tasks: [...]}; cada task exige goalId OU goalTitle)
 PATCH /api/agent/tasks/{id}                                             → atualizar (status, dueDate, responsibleEmail, title, description, goalId/goalTitle p/ mover de meta)
+GET   /api/agent/tasks/{id}/actions                                     → histórico de ações da tarefa
+POST  /api/agent/tasks/{id}/actions                                     → registrar ação executada (body: {"content": "..."})
+PATCH /api/agent/tasks/{id}/actions/{actionId}                          → corrigir o conteúdo de uma ação (carimba "editado")
+DELETE /api/agent/tasks/{id}/actions/{actionId}                         → remover ação registrada por engano
+POST  /api/agent/uploads/image                                          → subir print (use `claude-okr upload <arquivo>`)
 ```
 
+`{id}` de tarefa aceita o **cuid** ou o **code curto** (`#123` → `/api/agent/tasks/123`) — o code é
+o que aparece no painel, prefira ele ao falar com o usuário.
+
 Sempre via `claude-okr call <METHOD> <PATH> [<JSON_BODY>]`.
+
+> **Erros vêm no corpo.** `claude-okr call` imprime a resposta mesmo em 4xx/5xx e sai 1 —
+> leia o campo `error` (ex.: `content is required`, ou a lista de metas disponíveis num 400
+> de criação) em vez de tentar adivinhar o schema.
 
 ## Operações
 
@@ -178,6 +191,56 @@ claude-okr call PATCH /api/agent/tasks/{id} '{"status": "COMPLETED"}'
 ### 🔄 Atualizar tarefa (escrita — **SEMPRE confirme antes**)
 
 Campos suportados em PATCH: `status` (PENDING|IN_PROGRESS|COMPLETED), `dueDate` (YYYY-MM-DD ou null), `responsibleEmail` (resolve User; null disconnect), `responsibleName`, `title`, `description`, `goalId`/`goalTitle` (move a tarefa pra outra meta — a meta-alvo precisa ser do mesmo projeto). Mesma lógica de preview → confirma → executa.
+
+### 🧾 Ações de tarefa — o que foi feito (escrita de histórico)
+
+A **descrição** guarda o enunciado da tarefa; a **ação** guarda o que foi executado. Ao fechar
+uma sessão de trabalho que tocou uma tarefa, registre uma ação resumindo o que foi feito — não
+infle a descrição.
+
+```bash
+claude-okr call POST /api/agent/tasks/625/actions '{"content": "Ajustado o parser de datas; deploy na revision 00013."}'
+```
+
+- `content` é obrigatório (rich text: HTML simples ou texto puro). Sem ele → `400 content is required`.
+- O autor é o dono do PAT — não passe `authorName` a menos que esteja registrando por outra pessoa.
+- Diferente de criar tarefa, isto **não** exige confirmação prévia: é registro do que já aconteceu.
+
+**Anexar print (evidência visual da daily):** suba a imagem e cole o `html` devolvido no `content`.
+
+```bash
+claude-okr upload /tmp/print.png
+# → {"url":"/api/task-images/...","absoluteUrl":"https://...","html":"<img src=\"/api/task-images/...\" style=\"width: 60%\" />"}
+
+claude-okr call POST /api/agent/tasks/625/actions '{"content": "Painel novo no ar:<br /><img src=\"/api/task-images/<org>/<user>/177....png\" style=\"width: 60%\" />"}'
+```
+
+**Corrigir ou apagar uma ação** (typo, ação registrada na tarefa errada):
+
+```bash
+claude-okr call PATCH  /api/agent/tasks/625/actions/<actionId> '{"content": "texto corrigido"}'
+claude-okr call DELETE /api/agent/tasks/625/actions/<actionId>
+```
+
+O PATCH preserva autor e data original e marca a ação como "editado" no painel. Pegue o
+`actionId` em `GET /api/agent/tasks/{id}/actions`. Apagar é destrutivo — **confirme antes**.
+
+### 📅 Lista da daily — o que foi entregue (leitura — direto)
+
+Para "o que foi concluído hoje", use a janela de **conclusão**, não `updatedAt` (que se move a
+cada edição):
+
+```bash
+claude-okr call GET "/api/agent/tasks?projectToken=smo-2026&completedAfter=$(date +%Y-%m-%d)"
+```
+
+`completedAfter`/`completedBefore` aceitam `YYYY-MM-DD` e cobrem o dia inteiro em horário de
+Brasília. Combine os dois para a semana. Cada tarefa traz `_count.actions` — para contar o que
+foi registrado, e `GET /api/agent/tasks/{id}` traz o histórico completo quando o usuário pedir
+detalhe.
+
+> Tarefas concluídas antes de 2026-09-08 têm `completedAt` estimado a partir da última edição
+> (backfill). Para datas antigas, trate como aproximação.
 
 ### 📊 Status do projeto (leitura — direto)
 
@@ -261,5 +324,6 @@ Campos comuns: `notes` (opcional em `AUTO`, mas é o motivo de existir do check-
 ## Diagnóstico rápido
 
 - `claude-okr whoami` — confirma autenticação
+- Erro `HTTP 400 ...` — o JSON impresso logo acima traz o campo `error` com o motivo exato
 - `claude-okr logout && claude-okr login` — refaz auth se token bugou
 - `OKR_BASE_URL=http://localhost:3000 claude-okr ...` — força ambiente diferente (dev local)

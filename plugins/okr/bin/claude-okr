@@ -16,8 +16,10 @@
 #   ensure-login         Sai com 0 se já autenticado; sai com erro instrutivo se não
 #                        (use login-start + login-wait pra resolver).
 #   call <method> <path> [<json-body>]
-#                        Chama a API com o PAT atual.
+#                        Chama a API com o PAT atual. Sempre imprime o corpo da resposta,
+#                        inclusive em 4xx/5xx (é lá que vem o motivo do erro).
 #                        Erro instrutivo se não autenticado (não auto-loga — deixa o caller decidir).
+#   upload <arquivo>     Sobe uma imagem (print) pro OKR e devolve a URL + o <img> pronto.
 #
 # Convenções:
 #   - PAT salvo em $XDG_CONFIG_HOME/leve-okr/credentials (default ~/.config/leve-okr/credentials)
@@ -83,9 +85,9 @@ cmd_login_start() {
   local client_name="${1:-Claude Code ($(hostname))}"
 
   local resp device_code verification_uri
-  resp=$(curl -fsS -X POST -H "Content-Type: application/json" \
+  resp=$(curl -sS --fail-with-body -X POST -H "Content-Type: application/json" \
     -d "$(python3 -c "import json,sys; print(json.dumps({'clientName': sys.argv[1]}))" "$client_name")" \
-    "$OKR_BASE_URL/api/cli/auth/start") || die "Falha ao iniciar auth (verifique conexão com $OKR_BASE_URL)"
+    "$OKR_BASE_URL/api/cli/auth/start") || die "Falha ao iniciar auth (verifique conexão com $OKR_BASE_URL). Resposta: ${resp:-<vazia>}"
 
   device_code=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['deviceCode'])")
   verification_uri=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['verificationUriComplete'])")
@@ -119,9 +121,9 @@ cmd_login_wait() {
   local deadline=$(( $(date +%s) + 540 ))
   local resp status token user_email user_name
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    resp=$(curl -fsS -X POST -H "Content-Type: application/json" \
+    resp=$(curl -sS --fail-with-body -X POST -H "Content-Type: application/json" \
       -d "$(python3 -c "import json,sys; print(json.dumps({'deviceCode': sys.argv[1]}))" "$device_code")" \
-      "$OKR_BASE_URL/api/cli/auth/poll") || die "Falha no polling"
+      "$OKR_BASE_URL/api/cli/auth/poll") || die "Falha no polling. Resposta: ${resp:-<vazia>}"
     status=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))")
     case "$status" in
       pending)
@@ -259,16 +261,56 @@ EOF
     url="${OKR_BASE_URL}${path}"
   fi
 
+  # Sem `-f`: com ele o curl descarta o corpo em 4xx e o motivo real ("content is required",
+  # a lista de metas disponíveis num 400) some, sobrando só "curl: (22)". Aqui a resposta é
+  # sempre impressa e o código HTTP vem anexado na última linha, que é retirada antes.
+  local -a args=( -sS -X "$method" -H "Authorization: Bearer $token" -w $'\n%{http_code}' )
   if [ -n "$body" ]; then
-    curl -fsS -X "$method" \
-      -H "Authorization: Bearer $token" \
-      -H "Content-Type: application/json" \
-      -d "$body" \
-      "$url"
-  else
-    curl -fsS -X "$method" \
-      -H "Authorization: Bearer $token" \
-      "$url"
+    args+=( -H "Content-Type: application/json" -d "$body" )
+  fi
+
+  local resp
+  resp=$(curl "${args[@]}" "$url") || die "Falha de rede ao chamar $url"
+
+  local http_code="${resp##*$'\n'}"
+  local payload="${resp%$'\n'*}"
+  [ -n "$payload" ] && printf '%s\n' "$payload"
+
+  if [ "$http_code" -ge 400 ] 2>/dev/null; then
+    printf 'HTTP %s em %s %s — o motivo está no campo "error" da resposta acima.\n' \
+      "$http_code" "$method" "$path" >&2
+    exit 1
+  fi
+}
+
+# upload <arquivo> — sobe uma imagem (print) e imprime o JSON com a URL e o `html` pronto
+# pra colar no `content` de uma ação. Existe como subcomando porque `call` só manda JSON.
+cmd_upload() {
+  local file="${1:?'caminho do arquivo necessário'}"
+  [ -f "$file" ] || die "Arquivo não encontrado: $file"
+
+  local token
+  token=$(load_token 2>/dev/null) || {
+    cat <<'EOF' >&2
+AUTH_REQUIRED: não autenticado. Rode login-start + login-wait e repita.
+EOF
+    exit 2
+  }
+
+  local resp
+  resp=$(curl -sS -X POST \
+    -H "Authorization: Bearer $token" \
+    -F "file=@${file}" \
+    -w $'\n%{http_code}' \
+    "$OKR_BASE_URL/api/agent/uploads/image") || die "Falha de rede ao subir $file"
+
+  local http_code="${resp##*$'\n'}"
+  local payload="${resp%$'\n'*}"
+  [ -n "$payload" ] && printf '%s\n' "$payload"
+
+  if [ "$http_code" -ge 400 ] 2>/dev/null; then
+    printf 'HTTP %s ao subir a imagem — motivo no campo "error" acima.\n' "$http_code" >&2
+    exit 1
   fi
 }
 
@@ -283,6 +325,7 @@ main() {
     logout)       cmd_logout ;;
     ensure-login) cmd_ensure_login ;;
     call)         cmd_call "$@" ;;
+    upload)       cmd_upload "$@" ;;
     -h|--help|help|"")
       cat <<EOF
 claude-okr — CLI do plugin okr para Claude Code
@@ -294,6 +337,9 @@ Uso (programático, recomendado pro Claude usar):
   claude-okr ensure-login         Verifica auth. Exit 2 com instruções se faltar.
   claude-okr call <METHOD> <PATH> [<JSON_BODY>]
                                   Chama API. Exit 2 com instruções se faltar auth.
+                                  Em erro HTTP, imprime o corpo (campo "error") e sai 1.
+  claude-okr upload <ARQUIVO>     Sobe uma imagem e devolve JSON com url/html pra usar
+                                  no content de uma ação de tarefa.
 
 Uso (humano, manual no terminal):
   claude-okr login                Faz tudo (start + mostra URL no STDERR + wait).
