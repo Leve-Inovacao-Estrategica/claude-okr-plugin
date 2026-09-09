@@ -21,11 +21,11 @@ Fale naturalmente com o Claude Code. Exemplos:
 
 | Você diz | O plugin faz |
 |---|---|
-| *"quais tarefas pendentes do SMO?"* | Lista direto |
-| *"como está o Gestou?"* | Resumo por status + atrasadas |
+| *"quais tarefas pendentes do projeto X?"* | Lista direto |
+| *"como está o projeto X?"* | Resumo por status + atrasadas |
 | *"minhas tarefas pendentes em todos os projetos"* | Itera os projetos |
-| *"adiciona tarefa no SMO: revisar plano até sexta"* | Mostra preview → você confirma → cria |
-| *"marca a 5.10 do SMO como concluída"* | Acha por título → confirma → marca |
+| *"adiciona tarefa no projeto X: revisar plano até sexta"* | Mostra preview → você confirma → cria |
+| *"marca a 5.10 do projeto X como concluída"* | Acha por título → confirma → marca |
 
 Escritas (criar/atualizar/marcar) **sempre** pedem confirmação explícita antes de tocar a API.
 
