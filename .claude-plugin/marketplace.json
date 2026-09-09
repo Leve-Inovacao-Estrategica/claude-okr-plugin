@@ -8,9 +8,11 @@
     {
       "name": "okr",
       "source": "./plugins/okr",
-      "description": "Gerenciar tarefas no Leve OKR via Claude Code (criar, listar, marcar como concluída) com autenticação por conta Google da Leve.",
+      "description": "Plugin da Leve Inovação Estratégica para o Leve OKR: consultar e atualizar OKRs e tarefas dos projetos direto do Claude Code, com login pela conta Google da Leve.",
       "version": "0.2.0",
-      "author": { "name": "Leve Inovação" }
+      "author": {
+        "name": "Leve Inovação"
+      }
     }
   ]
 }

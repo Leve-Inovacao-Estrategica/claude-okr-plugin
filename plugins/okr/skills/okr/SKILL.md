@@ -1,6 +1,6 @@
 ---
 name: okr
-description: Gerenciar tarefas e metas/OKRs no Leve OKR (plataforma interna da Leve Inovação Estratégica). Use quando o usuário pedir para listar/criar/atualizar/concluir tarefas, consultar metas/objetivos/OKRs e seu progresso, ou mencionar projetos da Leve por nome ou apelido (ex.: Santa Maria Outlet/SMO, SOL Engrenagens/SOL, EW, Precifica, Compras White Label, Gestou — entre outros; a lista real vem da API, não é fixa). TRIGGER quando o usuário disser coisas como "adicionar tarefa", "criar tarefa", "marcar como feito", "marcar como concluída", "listar tarefas", "tarefas pendentes do X", "o que falta no X", "status do projeto X", "como estão as metas do X", "progresso do objetivo Y", "tem meta em risco". SKIP quando o pedido não envolver tarefas/metas/projetos da Leve OKR.
+description: Plugin da Leve Inovação Estratégica para o Leve OKR, a plataforma interna de gestão de OKRs e tarefas de projetos. Use quando o usuário pedir para listar/criar/atualizar/concluir tarefas, consultar metas/objetivos/OKRs e seu progresso, ou se referir a um projeto da Leve pelo nome ou apelido (a lista de projetos vem da API, nunca de uma tabela fixa). TRIGGER quando o usuário disser coisas como "adicionar tarefa", "criar tarefa", "marcar como feito", "marcar como concluída", "listar tarefas", "tarefas pendentes do X", "o que falta no X", "status do projeto X", "como estão as metas do X", "progresso do objetivo Y", "tem meta em risco". SKIP quando o pedido não envolver tarefas/metas/projetos da Leve OKR.
 ---
 
 # OKR — Leve OKR task management
@@ -66,7 +66,7 @@ A lista de projetos vive no banco e muda. **Sempre** resolva o projeto consultan
 claude-okr call GET /api/agent/projects
 ```
 
-Cada item traz `name`, `agentSlug`, `color` e `_count` de tasks/goals. Faça o match entre o que o usuário falou (nome livre ou apelido, ex: "SMO", "outlet", "santa maria") e o `name`/`agentSlug` retornado, e use o `agentSlug` como `projectToken` nas demais chamadas.
+Cada item traz `name`, `agentSlug`, `color` e `_count` de tasks/goals. Faça o match entre o que o usuário falou (nome livre, apelido ou sigla) e o `name`/`agentSlug` retornado, e use o `agentSlug` como `projectToken` nas demais chamadas.
 
 - Cacheie o resultado dentro da mesma conversa pra não repetir a chamada a cada operação.
 - Em caso de ambiguidade (mais de um match plausível), liste os candidatos e **confirme com o usuário** antes de prosseguir.
@@ -118,13 +118,13 @@ Sempre via `claude-okr call <METHOD> <PATH> [<JSON_BODY>]`.
 
 ### 📖 Listar tarefas (leitura — execute direto, sem confirmar)
 
-Para "tarefas pendentes do SMO":
+Para "tarefas pendentes do projeto X" (resolva o slug antes, como na seção acima):
 
 ```bash
-claude-okr call GET '/api/agent/tasks?projectToken=smo-2026&status=PENDING'
+claude-okr call GET '/api/agent/tasks?projectToken=<slug-do-projeto>&status=PENDING'
 ```
 
-Apresente como tabela: `[status] título — responsável — prazo`. Se vier vazio, diga "nenhuma tarefa pendente em SMO".
+Apresente como tabela: `[status] título — responsável — prazo`. Se vier vazio, diga "nenhuma tarefa pendente" nomeando o projeto que o usuário citou.
 
 Para "minhas tarefas pendentes em todos os projetos": liste projetos primeiro, depois itere com `responsibleEmail=<email-do-user>`. Para descobrir o email atual, leia `~/.config/leve-okr/credentials` ou confirme com o usuário.
 
@@ -137,14 +137,14 @@ Fluxo obrigatório:
 
 1. **Descubra a meta.** Liste as metas do projeto:
    ```bash
-   claude-okr call GET '/api/agent/goals?projectToken=smo-2026'
+   claude-okr call GET '/api/agent/goals?projectToken=<slug-do-projeto>'
    ```
    - Se o usuário **indicou** a meta (por nome), case com a lista e use o `id` (campo `goalId`).
    - Se **não indicou**, **pergunte qual meta** antes de prosseguir — não invente nem escolha sozinho.
 2. **Monte o payload** com `goalId` (preferencial) ou `goalTitle` (match exato do título no projeto) em cada task.
 3. **Mostre preview** em formato legível, incluindo a meta:
    ```
-   Vou criar essas tarefas em SMO › meta "Aumentar faturamento Q2":
+   Vou criar essas tarefas em <Projeto> › meta "Aumentar faturamento Q2":
      • "Revisar plano comercial" — responsável: Rafael — prazo: 2026-05-30
      • "Apresentação Q2" — responsável: Yuri — prazo: 2026-06-15
 
@@ -155,7 +155,7 @@ Fluxo obrigatório:
 
 ```bash
 claude-okr call POST /api/agent/tasks '{
-  "projectToken": "smo-2026",
+  "projectToken": "<slug-do-projeto>",
   "tasks": [
     {"title": "Revisar plano comercial", "goalId": "cmxxxx...", "dueDate": "2026-05-30", "origin": "claude-code-plugin"}
   ]
@@ -178,7 +178,7 @@ Fluxo:
 2. Match por título mais próximo (se múltiplos candidatos, peça pro usuário escolher pelo número)
 3. Preview:
    ```
-   Achei: "5.10 — Consolidação dos Charts" (id cmnxnj70m000hs1aq8xd94h8q) em SMO
+   Achei: "5.10 — Consolidação dos Charts" (id cmnxnj70m000hs1aq8xd94h8q) em <Projeto>
    Status atual: IN_PROGRESS → vai virar COMPLETED.
    Confirma? (s/n)
    ```
@@ -231,7 +231,7 @@ Para "o que foi concluído hoje", use a janela de **conclusão**, não `updatedA
 cada edição):
 
 ```bash
-claude-okr call GET "/api/agent/tasks?projectToken=smo-2026&completedAfter=$(date +%Y-%m-%d)"
+claude-okr call GET "/api/agent/tasks?projectToken=<slug-do-projeto>&completedAfter=$(date +%Y-%m-%d)"
 ```
 
 `completedAfter`/`completedBefore` aceitam `YYYY-MM-DD` e cobrem o dia inteiro em horário de
@@ -244,18 +244,18 @@ detalhe.
 
 ### 📊 Status do projeto (leitura — direto)
 
-Para "como está o SMO":
-1. `claude-okr call GET '/api/agent/tasks?projectToken=smo-2026'` (todas)
+Para "como está o projeto X":
+1. `claude-okr call GET '/api/agent/tasks?projectToken=<slug-do-projeto>'` (todas)
 2. Agrupar por status
 3. Apresentar `X pendentes, Y em andamento, Z concluídas (de N total)`
 4. Listar as 3-5 atrasadas (status ≠ COMPLETED && dueDate < hoje) se houver
 
 ### 🎯 Metas / OKRs (leitura — direto)
 
-Para perguntas sobre **objetivos/metas/OKR** (não tarefas): "como estão as metas do Gestou?", "qual o progresso do faturamento?", "tem alguma meta em risco?".
+Para perguntas sobre **objetivos/metas/OKR** (não tarefas): "como estão as metas do projeto X?", "qual o progresso do faturamento?", "tem alguma meta em risco?".
 
 ```bash
-claude-okr call GET '/api/agent/goals?projectToken=gestou-2026'
+claude-okr call GET '/api/agent/goals?projectToken=<slug-do-projeto>'
 ```
 
 Cada meta retorna:
@@ -283,7 +283,7 @@ claude-okr call POST /api/agent/goals/cml9...apdt/checkin '{"notes": "via plugin
 ```
 Sem confirmação prévia — não altera nenhum valor, só anexa a nota (o `progressPct` do momento é anexado automaticamente como snapshot).
 
-**Meta `MANUAL`** — para "registra que o faturamento do Gestou chegou em R$ 3.500" / "atualiza a meta X pra 60 clientes". **`value` é obrigatório e é o valor ABSOLUTO atual da meta, não um incremento** — o backend faz `currentValue = value`.
+**Meta `MANUAL`** — para "registra que o faturamento do projeto X chegou em R$ 3.500" / "atualiza a meta X pra 60 clientes". **`value` é obrigatório e é o valor ABSOLUTO atual da meta, não um incremento** — o backend faz `currentValue = value`.
 - Se o usuário der um valor absoluto ("chegou em 3500"), use-o direto.
 - Se falar em **incremento** ("subiu 500", "fechamos mais 2 clientes"), **primeiro leia a meta** via `/api/agent/goals` pra pegar o `currentValue` atual, some, e use o total. Mostre a conta no preview.
 
@@ -291,7 +291,7 @@ Fluxo (metas `MANUAL`, **sempre confirme antes** — é diferente do fluxo `AUTO
 1. Resolva a meta e confirme que `progressMode` é `MANUAL`.
 2. Preview com a conta explícita:
    ```
-   Check-in na meta "Faturamento" (Gestou):
+   Check-in na meta "Faturamento" (<Projeto>):
      currentValue 2600 → 3500 R$  (= 70% de 5000)
    Confirma? (s/n)
    ```
