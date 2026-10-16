@@ -7,3 +7,5 @@ node_modules/
 # editores
 .vscode/
 .idea/
+__pycache__/
+*.pyc

@@ -1,0 +1,9 @@
+{
+  "name": "okr",
+  "version": "0.3.0",
+  "description": "Consulte e gerencie OKRs e tarefas do Leve OKR, com login pela conta Google da Leve.",
+  "author": {"name": "Leve Inovação Estratégica", "url": "https://leveinovacao.com.br"},
+  "repository": "https://github.com/Leve-Inovacao-Estrategica/claude-okr-plugin",
+  "homepage": "https://okr.leveinovacao.com.br",
+  "skills": "./skills/"
+}

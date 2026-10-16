@@ -1,23 +1,35 @@
 ---
 name: okr
-description: Plugin da Leve Inovação Estratégica para o Leve OKR, a plataforma interna de gestão de OKRs e tarefas de projetos. Use quando o usuário pedir para listar/criar/atualizar/concluir tarefas, consultar metas/objetivos/OKRs e seu progresso, ou se referir a um projeto da Leve pelo nome ou apelido (a lista de projetos vem da API, nunca de uma tabela fixa). TRIGGER quando o usuário disser coisas como "adicionar tarefa", "criar tarefa", "marcar como feito", "marcar como concluída", "listar tarefas", "tarefas pendentes do X", "o que falta no X", "status do projeto X", "como estão as metas do X", "progresso do objetivo Y", "tem meta em risco". SKIP quando o pedido não envolver tarefas/metas/projetos da Leve OKR.
+description: Consulte e gerencie tarefas, metas, check-ins e progresso dos projetos da Leve OKR. Use para pedidos sobre a plataforma Leve OKR; não para planejamento genérico de projetos.
 ---
 
 # OKR — Leve OKR task management
 
-Plataforma interna da Leve Inovação Estratégica para gerenciar OKRs e tarefas de projetos com clientes. Esta skill conversa com a Agent API do Leve OKR em `https://okr.leveinovacao.com.br` via o helper `claude-okr`.
+Plataforma interna da Leve Inovação Estratégica para gerenciar OKRs e tarefas de projetos com clientes. Esta skill conversa com a Agent API do Leve OKR em `https://okr.leveinovacao.com.br` via o helper `python "<SKILL_DIR>/scripts/okr.py"`.
+
+## Execução nos dois clientes
+
+A mesma skill funciona no Claude Code e no Codex. Requer Python 3.9+ e acesso de rede ao Leve OKR; não requer Bash, curl ou pacotes pip.
+
+Nos exemplos, `<SKILL_DIR>` é o diretório que contém este `SKILL.md`. Substitua pelo caminho absoluto informado pelo cliente ao carregar a skill; nunca execute o placeholder literalmente. O helper está em `scripts/okr.py` dentro desse diretório, inclusive quando a skill é instalada isoladamente.
+
+Use `python` no Windows e `python3` em Linux/macOS, conforme o interpretador disponível. Não assuma que `claude-okr` está no PATH. No login, passe o nome do cliente: `login-start "Codex"` ou `login-start "Claude Code"`.
+
+Para evitar problemas com aspas no PowerShell, passe o JSON por arquivo UTF-8: `call POST /api/agent/tasks '@payload.json'`, ou use `-` para ler stdin. O arquivo deve conter só o payload, nunca credenciais.
+
+No uso pelo assistente, desabilite a abertura automática do navegador antes de `login-start`: PowerShell `$env:OKR_NO_BROWSER = "1"`; Bash `export OKR_NO_BROWSER=1`. Mostre a URL retornada no chat antes de iniciar `login-wait` e acompanhe a espera usando a ferramenta de processos do cliente.
 
 ## ⚠️ AUTENTICAÇÃO — UX CRÍTICA, SIGA EXATO
 
-Toda chamada à API precisa de PAT. Quando o PAT não existe, você (Claude) PRECISA mostrar a URL no chat IMEDIATAMENTE — sem o usuário ver, ele não consegue autorizar.
+Toda chamada à API precisa de PAT. Quando o PAT não existe, o assistente PRECISA mostrar a URL no chat IMEDIATAMENTE — sem o usuário ver, ele não consegue autorizar.
 
 ### Protocolo obrigatório (4 passos)
 
-**Passo 1 — Tente operação.** Se `claude-okr call ...` ou `claude-okr ensure-login` retornar **exit 2** com `AUTH_REQUIRED`, siga pra Passo 2.
+**Passo 1 — Tente operação.** Se `python "<SKILL_DIR>/scripts/okr.py" call ...` ou `python "<SKILL_DIR>/scripts/okr.py" ensure-login` retornar **exit 2** com `AUTH_REQUIRED`, siga pra Passo 2.
 
 **Passo 2 — Rode `login-start` em PRIMEIRO PLANO** (NÃO em background — é instantâneo, <2s):
 ```bash
-claude-okr login-start
+python "<SKILL_DIR>/scripts/okr.py" login-start
 ```
 Saída:
 ```json
@@ -25,45 +37,45 @@ Saída:
   "user_code": "ABCD-1234",
   "verification_uri": "https://okr.leveinovacao.com.br/cli-auth?code=ABCD-1234",
   "expires_in_seconds": 600,
-  "browser_opened": true
+  "browser_opened": false
 }
 ```
-Esse comando **já tenta abrir o navegador** do usuário com `xdg-open`/`open`. Não rode em background.
+Esse comando tenta abrir o navegador padrão. No uso pelo assistente, defina `OKR_NO_BROWSER=1` e mostre o link no chat.
 
 **Passo 3 — IMEDIATAMENTE depois, MOSTRE A URL NO CHAT** (em markdown, fora de qualquer bloco de tool). Exemplo de mensagem ideal:
 
 > 🔑 **Autorize o plugin uma vez:**
 >
-> Abri o navegador. Se não abriu sozinho, abra: https://okr.leveinovacao.com.br/cli-auth?code=ABCD-1234
+> Abra no navegador: https://okr.leveinovacao.com.br/cli-auth?code=ABCD-1234
 >
 > Código: `ABCD-1234` (válido 10 min). Aguardando autorização...
 
-⚠️ **NÃO pule este passo. NÃO esconda a URL no Bash block.** Se a URL ficar só dentro do output do Bash, o usuário precisa clicar em "Ctrl+O / expandir" pra ver — UX horrível.
+**Não pule este passo.** A URL precisa aparecer em uma mensagem do assistente, não apenas na saída de uma ferramenta.
 
 **Passo 4 — Rode `login-wait` (pode ser em background ou foreground):**
 ```bash
-claude-okr login-wait
+python "<SKILL_DIR>/scripts/okr.py" login-wait
 ```
-Bloqueia até o usuário clicar "Autorizar" no browser. Termina com `✅ Autenticado como ...`. Daí retoma a operação original que tinha falhado.
+Bloqueia até o usuário clicar "Autorizar" no browser. Termina com `Autenticado como ...`. Daí retoma a operação original que tinha falhado.
 
 ### Casos de borda
 
-- **Já autenticado** (caminho mais comum): `claude-okr ensure-login` sai com 0 silenciosamente. Pode pular pro próximo passo da operação direto.
-- **Token salvo mas inválido**: erros começam com `AUTH_REQUIRED: token salvo está inválido`. Rode `claude-okr logout` e siga o protocolo de 4 passos.
+- **Já autenticado** (caminho mais comum): `python "<SKILL_DIR>/scripts/okr.py" ensure-login` sai com 0. Pode pular pro próximo passo da operação direto.
+- **Token salvo mas inválido**: erros começam com `AUTH_REQUIRED`. Siga o protocolo de 4 passos para refazer o login; um erro de rede ou HTTP 500 não exige apagar credenciais.
 - **Negado / código expirado**: `login-wait` morre com mensagem clara. Mostre o erro pro usuário e ofereça refazer (`login-start` de novo).
 
 ### Restrição
 
 Só emails `@leveinovacao.com.br` podem autorizar PAT. Outras pessoas conseguem instalar o plugin mas o `/cli-auth/approve` recusa.
 
-**Nunca faça curl direto com Bearer:** o helper `claude-okr call` injeta o token e revalida. Use sempre ele.
+**Nunca faça curl direto com Bearer:** o helper `python "<SKILL_DIR>/scripts/okr.py" call` injeta o token e revalida. Use sempre ele.
 
 ## Projetos (resolução dinâmica — NÃO hardcode)
 
 A lista de projetos vive no banco e muda. **Sempre** resolva o projeto consultando a API, nunca uma tabela memorizada:
 
 ```bash
-claude-okr call GET /api/agent/projects
+python "<SKILL_DIR>/scripts/okr.py" call GET /api/agent/projects
 ```
 
 Cada item traz `name`, `agentSlug`, `color` e `_count` de tasks/goals. Faça o match entre o que o usuário falou (nome livre, apelido ou sigla) e o `name`/`agentSlug` retornado, e use o `agentSlug` como `projectToken` nas demais chamadas.
@@ -78,7 +90,7 @@ Cada item traz `name`, `agentSlug`, `color` e `_count` de tasks/goals. Faça o m
 Pessoas e emails também vêm do banco. Pra mapear um primeiro nome ("Rafael", "Yuri", "João", "Gui") num email/responsável, consulte:
 
 ```bash
-claude-okr call GET /api/agent/users
+python "<SKILL_DIR>/scripts/okr.py" call GET /api/agent/users
 ```
 
 Retorna `{ id, name, email, role }` dos usuários ativos. Faça o match por nome e use o `email` como `responsibleEmail`. Se houver mais de um match plausível, confirme com o usuário.
@@ -102,15 +114,15 @@ GET   /api/agent/tasks/{id}/actions                                     → hist
 POST  /api/agent/tasks/{id}/actions                                     → registrar ação executada (body: {"content": "..."})
 PATCH /api/agent/tasks/{id}/actions/{actionId}                          → corrigir o conteúdo de uma ação (carimba "editado")
 DELETE /api/agent/tasks/{id}/actions/{actionId}                         → remover ação registrada por engano
-POST  /api/agent/uploads/image                                          → subir print (use `claude-okr upload <arquivo>`)
+POST  /api/agent/uploads/image                                          → subir print (use `python "<SKILL_DIR>/scripts/okr.py" upload <arquivo>`)
 ```
 
 `{id}` de tarefa aceita o **cuid** ou o **code curto** (`#123` → `/api/agent/tasks/123`) — o code é
 o que aparece no painel, prefira ele ao falar com o usuário.
 
-Sempre via `claude-okr call <METHOD> <PATH> [<JSON_BODY>]`.
+Sempre via `python "<SKILL_DIR>/scripts/okr.py" call <METHOD> <PATH> [<JSON_BODY>]`.
 
-> **Erros vêm no corpo.** `claude-okr call` imprime a resposta mesmo em 4xx/5xx e sai 1 —
+> **Erros vêm no corpo.** `python "<SKILL_DIR>/scripts/okr.py" call` imprime a resposta mesmo em 4xx/5xx e sai 1 —
 > leia o campo `error` (ex.: `content is required`, ou a lista de metas disponíveis num 400
 > de criação) em vez de tentar adivinhar o schema.
 
@@ -121,12 +133,12 @@ Sempre via `claude-okr call <METHOD> <PATH> [<JSON_BODY>]`.
 Para "tarefas pendentes do projeto X" (resolva o slug antes, como na seção acima):
 
 ```bash
-claude-okr call GET '/api/agent/tasks?projectToken=<slug-do-projeto>&status=PENDING'
+python "<SKILL_DIR>/scripts/okr.py" call GET '/api/agent/tasks?projectToken=<slug-do-projeto>&status=PENDING'
 ```
 
 Apresente como tabela: `[status] título — responsável — prazo`. Se vier vazio, diga "nenhuma tarefa pendente" nomeando o projeto que o usuário citou.
 
-Para "minhas tarefas pendentes em todos os projetos": liste projetos primeiro, depois itere com `responsibleEmail=<email-do-user>`. Para descobrir o email atual, leia `~/.config/leve-okr/credentials` ou confirme com o usuário.
+Para "minhas tarefas pendentes em todos os projetos": liste projetos primeiro, depois itere com `responsibleEmail=<email-do-user>`. Para descobrir o email atual, confirme com o usuário. As credenciais contêm apenas o token; não leia nem exiba esse arquivo no chat. `whoami` verifica o token e conta projetos, mas não retorna identidade.
 
 ### ➕ Criar tarefa (escrita — **SEMPRE confirme antes**)
 
@@ -137,7 +149,7 @@ Fluxo obrigatório:
 
 1. **Descubra a meta.** Liste as metas do projeto:
    ```bash
-   claude-okr call GET '/api/agent/goals?projectToken=<slug-do-projeto>'
+   python "<SKILL_DIR>/scripts/okr.py" call GET '/api/agent/goals?projectToken=<slug-do-projeto>'
    ```
    - Se o usuário **indicou** a meta (por nome), case com a lista e use o `id` (campo `goalId`).
    - Se **não indicou**, **pergunte qual meta** antes de prosseguir — não invente nem escolha sozinho.
@@ -154,7 +166,7 @@ Fluxo obrigatório:
 5. **Execute** apenas se confirmado:
 
 ```bash
-claude-okr call POST /api/agent/tasks '{
+python "<SKILL_DIR>/scripts/okr.py" call POST /api/agent/tasks '{
   "projectToken": "<slug-do-projeto>",
   "tasks": [
     {"title": "Revisar plano comercial", "goalId": "cmxxxx...", "dueDate": "2026-05-30", "origin": "claude-code-plugin"}
@@ -165,7 +177,7 @@ claude-okr call POST /api/agent/tasks '{
 Notas:
 - **`goalId`/`goalTitle` é obrigatório** em cada task — sem isso o backend rejeita (400). Cada task pode ir pra uma meta diferente.
 - `goalId` é o caminho seguro; `goalTitle` é conveniência (match exato case-insensitive; se ambíguo, o backend pede `goalId`).
-- Sempre marque `"origin": "claude-code-plugin"` (diferencia tarefas criadas via plugin de outras fontes)
+- Mantenha `"origin": "claude-code-plugin"` nos dois clientes por compatibilidade com o backend atual.
 - Quando não há responsibleEmail explícito, o backend atribui automaticamente ao dono do PAT — não precisa passar
 - Para atribuir a outra pessoa, inclua `"responsibleEmail": "fulano@leveinovacao.com.br"` na task
 
@@ -174,7 +186,7 @@ Notas:
 Se o usuário disser "marca a X como feito" sem ID, primeiro **liste com filtros** pra encontrar o ID. Não chute.
 
 Fluxo:
-1. Buscar: `claude-okr call GET '/api/agent/tasks?projectToken=...&status=PENDING'`
+1. Buscar: `python "<SKILL_DIR>/scripts/okr.py" call GET '/api/agent/tasks?projectToken=...&status=PENDING'`
 2. Match por título mais próximo (se múltiplos candidatos, peça pro usuário escolher pelo número)
 3. Preview:
    ```
@@ -185,7 +197,7 @@ Fluxo:
 4. Espere confirmação
 5. Execute:
 ```bash
-claude-okr call PATCH /api/agent/tasks/{id} '{"status": "COMPLETED"}'
+python "<SKILL_DIR>/scripts/okr.py" call PATCH /api/agent/tasks/{id} '{"status": "COMPLETED"}'
 ```
 
 ### 🔄 Atualizar tarefa (escrita — **SEMPRE confirme antes**)
@@ -199,7 +211,7 @@ uma sessão de trabalho que tocou uma tarefa, registre uma ação resumindo o qu
 infle a descrição.
 
 ```bash
-claude-okr call POST /api/agent/tasks/625/actions '{"content": "Ajustado o parser de datas; deploy na revision 00013."}'
+python "<SKILL_DIR>/scripts/okr.py" call POST /api/agent/tasks/625/actions '{"content": "Ajustado o parser de datas; deploy na revision 00013."}'
 ```
 
 - `content` é obrigatório (rich text: HTML simples ou texto puro). Sem ele → `400 content is required`.
@@ -209,17 +221,17 @@ claude-okr call POST /api/agent/tasks/625/actions '{"content": "Ajustado o parse
 **Anexar print (evidência visual da daily):** suba a imagem e cole o `html` devolvido no `content`.
 
 ```bash
-claude-okr upload /tmp/print.png
+python "<SKILL_DIR>/scripts/okr.py" upload /tmp/print.png
 # → {"url":"/api/task-images/...","absoluteUrl":"https://...","html":"<img src=\"/api/task-images/...\" style=\"width: 60%\" />"}
 
-claude-okr call POST /api/agent/tasks/625/actions '{"content": "Painel novo no ar:<br /><img src=\"/api/task-images/<org>/<user>/177....png\" style=\"width: 60%\" />"}'
+python "<SKILL_DIR>/scripts/okr.py" call POST /api/agent/tasks/625/actions '{"content": "Painel novo no ar:<br /><img src=\"/api/task-images/<org>/<user>/177....png\" style=\"width: 60%\" />"}'
 ```
 
 **Corrigir ou apagar uma ação** (typo, ação registrada na tarefa errada):
 
 ```bash
-claude-okr call PATCH  /api/agent/tasks/625/actions/<actionId> '{"content": "texto corrigido"}'
-claude-okr call DELETE /api/agent/tasks/625/actions/<actionId>
+python "<SKILL_DIR>/scripts/okr.py" call PATCH  /api/agent/tasks/625/actions/<actionId> '{"content": "texto corrigido"}'
+python "<SKILL_DIR>/scripts/okr.py" call DELETE /api/agent/tasks/625/actions/<actionId>
 ```
 
 O PATCH preserva autor e data original e marca a ação como "editado" no painel. Pegue o
@@ -231,7 +243,7 @@ Para "o que foi concluído hoje", use a janela de **conclusão**, não `updatedA
 cada edição):
 
 ```bash
-claude-okr call GET "/api/agent/tasks?projectToken=<slug-do-projeto>&completedAfter=$(date +%Y-%m-%d)"
+python "<SKILL_DIR>/scripts/okr.py" call GET "/api/agent/tasks?projectToken=<slug-do-projeto>&completedAfter=<YYYY-MM-DD>"
 ```
 
 `completedAfter`/`completedBefore` aceitam `YYYY-MM-DD` e cobrem o dia inteiro em horário de
@@ -245,7 +257,7 @@ detalhe.
 ### 📊 Status do projeto (leitura — direto)
 
 Para "como está o projeto X":
-1. `claude-okr call GET '/api/agent/tasks?projectToken=<slug-do-projeto>'` (todas)
+1. `python "<SKILL_DIR>/scripts/okr.py" call GET '/api/agent/tasks?projectToken=<slug-do-projeto>'` (todas)
 2. Agrupar por status
 3. Apresentar `X pendentes, Y em andamento, Z concluídas (de N total)`
 4. Listar as 3-5 atrasadas (status ≠ COMPLETED && dueDate < hoje) se houver
@@ -255,7 +267,7 @@ Para "como está o projeto X":
 Para perguntas sobre **objetivos/metas/OKR** (não tarefas): "como estão as metas do projeto X?", "qual o progresso do faturamento?", "tem alguma meta em risco?".
 
 ```bash
-claude-okr call GET '/api/agent/goals?projectToken=<slug-do-projeto>'
+python "<SKILL_DIR>/scripts/okr.py" call GET '/api/agent/goals?projectToken=<slug-do-projeto>'
 ```
 
 Cada meta retorna:
@@ -279,7 +291,7 @@ Como apresentar:
 
 **Meta `AUTO`** — completude vem das tarefas; check-in é só uma nota qualitativa da semana, sem `value`. Use para "registra um check-in na meta X: fechamos a integração, falta só o teste final".
 ```bash
-claude-okr call POST /api/agent/goals/cml9...apdt/checkin '{"notes": "via plugin"}'
+python "<SKILL_DIR>/scripts/okr.py" call POST /api/agent/goals/cml9...apdt/checkin '{"notes": "via plugin"}'
 ```
 Sem confirmação prévia — não altera nenhum valor, só anexa a nota (o `progressPct` do momento é anexado automaticamente como snapshot).
 
@@ -298,7 +310,7 @@ Fluxo (metas `MANUAL`, **sempre confirme antes** — é diferente do fluxo `AUTO
 3. Espere confirmação.
 4. Execute:
 ```bash
-claude-okr call POST /api/agent/goals/cml9...apdt/checkin '{"value": 3500, "notes": "via plugin"}'
+python "<SKILL_DIR>/scripts/okr.py" call POST /api/agent/goals/cml9...apdt/checkin '{"value": 3500, "notes": "via plugin"}'
 ```
 
 Campos comuns: `notes` (opcional em `AUTO`, mas é o motivo de existir do check-in ali — peça se o usuário não deu contexto; opcional em `MANUAL`), `weekNumber` (opcional — auto-calculado pela semana atual se omitido).
@@ -307,23 +319,23 @@ Campos comuns: `notes` (opcional em `AUTO`, mas é o motivo de existir do check-
 
 ## Regras de qualidade
 
-- **Datas**: aceite linguagem natural ("amanhã", "sexta", "em 3 dias") e converta pra `YYYY-MM-DD`. Hoje é `date +%Y-%m-%d`.
+- **Datas**: aceite linguagem natural ("amanhã", "sexta", "em 3 dias") e converta pra `YYYY-MM-DD`. Use a data atual em America/Sao_Paulo e passe datas literais; não dependa de comandos de shell Unix.
 - **Match de tarefas por título**: priorize match exato; múltiplos candidatos → usuário escolhe pelo número da lista. **Nunca** atualize várias tarefas com um único pedido sem confirmação explícita.
 - **Erros do backend**: se receber 400/404/500, mostre o `error` do JSON e pare. Não tente recuperar sozinho.
 - **Limite de saída**: ao listar mais de 15 tarefas, mostre só as 10 mais relevantes (pendentes/em-andamento, ordenadas por prazo) e diga "+ N concluídas (peça pra ver tudo se quiser)".
-- **Origin**: ao criar via skill, sempre marque `"origin": "claude-code-plugin"`. Isso ajuda na auditoria.
+- **Origin**: ao criar via skill, sempre marque `"origin": "claude-code-plugin"`. Esse é o valor legado compatível com a API. Não invente um novo origin sem confirmar suporte no backend.
 
 ## O que NÃO fazer
 
-- Não fazer escritas (POST/PATCH) sem confirmação humana explícita
+- Criação/edição de tarefas, edição/exclusão de ações e check-ins MANUAL exigem preview e confirmação; registros de ações e notas AUTO seguem as exceções descritas acima.
 - Não chutar IDs de tarefa — sempre buscar primeiro
 - Não usar `responsibleName` (string solta) quando puder usar `responsibleEmail` (vincula User real)
 - Não silenciar erros — sempre mostrar o que o backend devolveu
-- Não fazer `curl` direto com Bearer — use sempre `claude-okr call` (cuida do PAT, refresh, retry)
+- Não fazer `curl` direto com Bearer — use sempre `python "<SKILL_DIR>/scripts/okr.py" call` (injeta e valida o PAT; não faz refresh nem repete escritas automaticamente)
 
 ## Diagnóstico rápido
 
-- `claude-okr whoami` — confirma autenticação
+- `python "<SKILL_DIR>/scripts/okr.py" whoami` — confirma autenticação
 - Erro `HTTP 400 ...` — o JSON impresso logo acima traz o campo `error` com o motivo exato
-- `claude-okr logout && claude-okr login` — refaz auth se token bugou
-- `OKR_BASE_URL=http://localhost:3000 claude-okr ...` — força ambiente diferente (dev local)
+- Para refazer auth, use `login-start` e `login-wait`, mostrando o link no chat entre eles. `logout` remove as credenciais dos dois clientes.
+- Para ambiente de desenvolvimento, configure `OKR_BASE_URL`: PowerShell `$env:OKR_BASE_URL = "http://localhost:3000"`; Bash `export OKR_BASE_URL=http://localhost:3000`.
