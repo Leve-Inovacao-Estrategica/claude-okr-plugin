@@ -127,6 +127,56 @@ class HelperTests(unittest.TestCase):
         self.assertIn(b'fake-image', checked.call_args.kwargs['data'])
         self.assertIn('multipart/form-data', checked.call_args.kwargs['content_type'])
 
+    def test_action_rejects_dropped_tags_before_sending(self):
+        page = Path(self.temp.name) / 'acao.html'
+        page.write_text('<p>Ação</p><table><tr><td>x</td></tr></table>', encoding='utf-8')
+        with patch.object(okr.Client, 'request') as request:
+            result, _, error = self.run_main('acao', '745', str(page))
+        self.assertEqual(result, 1)
+        self.assertIn('table', error)
+        request.assert_not_called()
+
+    def test_action_posts_utf8_and_verifies_stored_content(self):
+        page = Path(self.temp.name) / 'acao.html'
+        page.write_text('<p>Validação — ok</p><img src="/api/task-images/a.png" />', encoding='utf-8')
+        stored = [{'id': 'act1', 'content': '<p>Validação — ok</p><img src="/api/task-images/a.png">'}]
+        replies = ['{"id":"act1"}', json.dumps(stored)]
+        with patch.object(okr.Client, 'authenticated', return_value=('token', '[]')), patch.object(okr.Client, 'checked', side_effect=replies) as checked:
+            result, output, _ = self.run_main('acao', '745', str(page))
+        self.assertEqual(result, 0)
+        method, path = checked.call_args_list[0].args
+        self.assertEqual((method, path), ('POST', '/api/agent/tasks/745/actions'))
+        self.assertEqual(json.loads(checked.call_args_list[0].kwargs['data'])['content'], page.read_text(encoding='utf-8'))
+        self.assertIn('act1', output)
+
+    def test_action_detects_corrupted_storage_and_edits_by_id(self):
+        page = Path(self.temp.name) / 'acao.html'
+        page.write_text('<p>Revisão</p>', encoding='utf-8')
+        replies = ['{}', json.dumps({'actions': [{'id': 'act9', 'content': '<p>Revis�o</p>'}]})]
+        with patch.object(okr.Client, 'authenticated', return_value=('token', '[]')), patch.object(okr.Client, 'checked', side_effect=replies) as checked:
+            result, _, error = self.run_main('acao', '745', str(page), '--editar', 'act9')
+        self.assertEqual(result, 1)
+        self.assertEqual(checked.call_args_list[0].args, ('PATCH', '/api/agent/tasks/745/actions/act9'))
+        self.assertIn('U+FFFD', error)
+
+    def test_attachments_download_images_from_description_and_actions(self):
+        task = {'description': '<p>Ver</p><img src="/api/task-images/d.jpeg">',
+                'actions': [{'id': 'a1', 'content': '<img src="/api/task-images/x.png"><img src="https://other.example.test/y.png">'}]}
+        folder = Path(self.temp.name) / 'anexos'
+        with patch.object(okr.Client, 'authenticated', return_value=('token', '[]')), patch.object(okr.Client, 'checked', return_value=json.dumps(task)), patch.object(okr.Client, 'download') as download:
+            download.side_effect = [None, None, okr.CLIError('Imagem fora do servidor do Leve OKR')]
+            result, _, error = self.run_main('anexos', '745', '--saida', str(folder))
+        self.assertEqual(result, 1)
+        self.assertIn('fora do servidor', error)
+        targets = [call.args[1].name for call in download.call_args_list]
+        self.assertEqual(targets[:2], ['descricao_1.jpeg', 'acao_a1_1.png'])
+
+    def test_download_refuses_foreign_host(self):
+        with patch.object(self.client.opener, 'open') as opened:
+            with self.assertRaises(okr.CLIError):
+                self.client.download('https://other.example.test/x.png', Path(self.temp.name) / 'x.png', 'test-token')
+            opened.assert_not_called()
+
     def test_logout_removes_both_files(self):
         self.client.store(self.client.credentials, 'OKR_TOKEN=test-token')
         self.client.store(self.client.pending, 'device')

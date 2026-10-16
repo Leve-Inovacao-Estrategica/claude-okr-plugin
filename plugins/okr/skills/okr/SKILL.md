@@ -13,7 +13,7 @@ A mesma skill funciona no Claude Code e no Codex. Requer Python 3.9+ e acesso de
 
 Nos exemplos, `<SKILL_DIR>` é o diretório que contém este `SKILL.md`. Substitua pelo caminho absoluto informado pelo cliente ao carregar a skill; nunca execute o placeholder literalmente. O helper está em `scripts/okr.py` dentro desse diretório, inclusive quando a skill é instalada isoladamente.
 
-Use `python` no Windows e `python3` em Linux/macOS, conforme o interpretador disponível. Não assuma que `claude-okr` está no PATH. No login, passe o nome do cliente: `login-start "Codex"` ou `login-start "Claude Code"`.
+Use `python` no Windows e `python3` em Linux/macOS, conforme o interpretador disponível. No Git Bash do Windows, rode `export MSYS_NO_PATHCONV=1` antes: sem isso o `/api/...` vira caminho do Windows e o helper recusa com "O caminho deve pertencer ao servidor". Não assuma que `claude-okr` está no PATH. No login, passe o nome do cliente: `login-start "Codex"` ou `login-start "Claude Code"`.
 
 Para evitar problemas com aspas no PowerShell, passe o JSON por arquivo UTF-8: `call POST /api/agent/tasks '@payload.json'`, ou use `-` para ler stdin. O arquivo deve conter só o payload, nunca credenciais.
 
@@ -117,6 +117,9 @@ DELETE /api/agent/tasks/{id}/actions/{actionId}                         → remo
 POST  /api/agent/uploads/image                                          → subir print (use `python "<SKILL_DIR>/scripts/okr.py" upload <arquivo>`)
 ```
 
+Atalhos do helper: `upload <arquivo>`, `acao <tarefa> <arquivo.html> [--editar <actionId>]`
+(registra ação conferindo o que gravou) e `anexos <tarefa> [--saida <pasta>]` (baixa os prints).
+
 `{id}` de tarefa aceita o **cuid** ou o **code curto** (`#123` → `/api/agent/tasks/123`) — o code é
 o que aparece no painel, prefira ele ao falar com o usuário.
 
@@ -210,32 +213,49 @@ A **descrição** guarda o enunciado da tarefa; a **ação** guarda o que foi ex
 uma sessão de trabalho que tocou uma tarefa, registre uma ação resumindo o que foi feito — não
 infle a descrição.
 
+Escreva o conteúdo num arquivo HTML (UTF-8) e use `acao`. Ele recusa antes de enviar as tags que o
+Leve OKR descarta, grava e relê a ação para conferir acentos e imagens (o backend responde 201
+mesmo quando altera o conteúdo):
+
 ```bash
-python "<SKILL_DIR>/scripts/okr.py" call POST /api/agent/tasks/625/actions '{"content": "Ajustado o parser de datas; deploy na revision 00013."}'
+python "<SKILL_DIR>/scripts/okr.py" acao 625 acao.html
+# → {"task": "625", "actionId": "cm...", "images": 1}
 ```
 
-- `content` é obrigatório (rich text: HTML simples ou texto puro). Sem ele → `400 content is required`.
+- Tags preservadas: `p strong ul ol li br img`. **`<table>` vira texto corrido** (renderize a tabela
+  como imagem e suba com `upload`); **`<code>` é descartado**.
 - O autor é o dono do PAT — não passe `authorName` a menos que esteja registrando por outra pessoa.
 - Diferente de criar tarefa, isto **não** exige confirmação prévia: é registro do que já aconteceu.
+- Texto curto sem HTML também pode ir por `call POST /api/agent/tasks/{id}/actions '@payload.json'`.
 
-**Anexar print (evidência visual da daily):** suba a imagem e cole o `html` devolvido no `content`.
+**Anexar print (evidência visual da daily):** suba a imagem e cole o `html` devolvido no arquivo da ação.
 
 ```bash
 python "<SKILL_DIR>/scripts/okr.py" upload /tmp/print.png
 # → {"url":"/api/task-images/...","absoluteUrl":"https://...","html":"<img src=\"/api/task-images/...\" style=\"width: 60%\" />"}
-
-python "<SKILL_DIR>/scripts/okr.py" call POST /api/agent/tasks/625/actions '{"content": "Painel novo no ar:<br /><img src=\"/api/task-images/<org>/<user>/177....png\" style=\"width: 60%\" />"}'
 ```
 
 **Corrigir ou apagar uma ação** (typo, ação registrada na tarefa errada):
 
 ```bash
-python "<SKILL_DIR>/scripts/okr.py" call PATCH  /api/agent/tasks/625/actions/<actionId> '{"content": "texto corrigido"}'
+python "<SKILL_DIR>/scripts/okr.py" acao 625 acao.html --editar <actionId>
 python "<SKILL_DIR>/scripts/okr.py" call DELETE /api/agent/tasks/625/actions/<actionId>
 ```
 
 O PATCH preserva autor e data original e marca a ação como "editado" no painel. Pegue o
 `actionId` em `GET /api/agent/tasks/{id}/actions`. Apagar é destrutivo — **confirme antes**.
+
+### 🖼️ Prints anexados a uma tarefa (leitura — direto)
+
+A descrição e as ações podem trazer o enunciado real num `<img>` (uma tabela colada, por exemplo).
+Ao resumir uma tarefa, nunca ignore as imagens: baixe e abra.
+
+```bash
+python "<SKILL_DIR>/scripts/okr.py" anexos 745 --saida <pasta>
+# → {"folder": "...", "files": [".../descricao_1.jpeg", ".../acao_<id>_1.png"]}
+```
+
+O token não aparece na saída; imagens de outros domínios são recusadas.
 
 ### 📅 Lista da daily — o que foi entregue (leitura — direto)
 
